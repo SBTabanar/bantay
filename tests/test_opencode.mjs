@@ -42,3 +42,10 @@ test('plugin paths are matched case-insensitively', async () => {
   globalThis.fetch = async () => { throw new Error('daemon must not be asked'); };
   await assert.rejects(plugin.guard('write', {filePath: '.OpenCode/Plugin/bantay.js', content: ''}), /Disables the Bantay/);
 });
+test('list of a secrets directory is judged by the daemon, not skipped', async () => {
+  let seen;
+  globalThis.fetch = async (_, options) => { seen = JSON.parse(options.body); return {ok: true, json: async () => ({verdict: 'block', reason: 'secrets dir', rule: 'read_secret_file'})}; };
+  await assert.rejects(plugin.guard('list', {path: '~/.ssh'}), /secrets dir/);
+  assert.equal(seen.tool_name, 'LS');
+  assert.equal(seen.tool_input.path, '~/.ssh');
+});

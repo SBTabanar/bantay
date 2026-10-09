@@ -2,6 +2,7 @@ from __future__ import annotations
 import os, re, shlex, time
 from .types import ToolCall, Decision
 from . import rules
+from .secrets import SECRET_FILE_RE
 
 # Commands that skip the model. Joins are [ \t] only, so a newline can never chain a second command.
 # Each head ends at whitespace or end of string (not \b, which matches before "-": `git fetch-pack`,
@@ -41,7 +42,7 @@ ALLOWLIST_RE = re.compile(r"^[ \t]*" + _OPTION_EXEC + r"(?:" + _WITH_ARGS + r"|"
 def _plain_add_path(a: str) -> bool:
     """An explicit path below the project: no option, glob, pathspec magic, home, absolute or parent path,
     and nothing that normalizes to the project root (`./`, `src/..`)."""
-    if a.startswith(("-", "~", ":")) or re.search(r"[*?\[\]]", a):
+    if a.startswith(("-", "~", ":")) or re.search(r"[*?\[\]]", a) or SECRET_FILE_RE.search(" " + a):
         return False
     n = os.path.normpath(a)
     return not (os.path.isabs(n) or n in (".", "..") or n.startswith("../"))
@@ -75,10 +76,11 @@ def routine_git(command: str) -> bool:
     if sub in ("pull", "push"):
         flags = {"--ff-only", "--rebase", "--no-rebase"} if sub == "pull" else {"-u", "--set-upstream"}
         positional = [a for a in args if a not in flags]
-        # A remote that is a local path (/tmp/x, ./x, ../x, ~/x) can copy the repo anywhere: model review.
-        return len(positional) <= 2 and all(
-            not a.startswith(("-", "+", ":", "/", ".", "~")) and ":" not in a and not re.search(r"[*?\[\]]", a)
-            for a in positional)
+        # A remote that is a local path (/tmp/x, ./x, sub/../../x, ~/x) can copy the repo anywhere: model
+        # review. Remote names have no "/", and ref names never contain "..".
+        return len(positional) <= 2 and (not positional or "/" not in positional[0]) and all(
+            not a.startswith(("-", "+", ":", "/", ".", "~")) and ":" not in a and ".." not in a
+            and not re.search(r"[*?\[\]]", a) for a in positional)
     return False
 
 class Engine:

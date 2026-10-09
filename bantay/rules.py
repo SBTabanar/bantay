@@ -23,7 +23,7 @@ class Rule:
 
 BASH = ("Bash",)
 FILES = ("Write", "Edit", "MultiEdit", "NotebookEdit")
-READS = ("Read", "Grep", "Glob")
+READS = ("Read", "Grep", "Glob", "LS")  # LS: OpenCode's `list`
 HOME = os.path.expanduser("~")
 
 def _rx(p: str) -> re.Pattern:
@@ -181,19 +181,28 @@ SUBSTITUTIONS = ("$(", "`", "<(", ">(")
 
 # Claude Code commits with `git commit -m "$(cat <<'EOF'\n<message>\nEOF\n)"`. With a quoted delimiter
 # the shell expands nothing in the body, so the substitution is a literal message. Only that exact shape
-# is collapsed: an unquoted delimiter, a body holding a substitution, or a body line equal to the
-# delimiter (which would end the heredoc early and run what follows) leaves the command untouched.
+# is collapsed, and only where the shell provably sees it as one: the `git commit` must start a command
+# with nothing quoted, escaped, commented, substituted or heredoc'd before it (otherwise the match may sit
+# inside a string and the "body" may be live shell), and the body must hold no substitution, no `"`
+# (macOS bash 3.2 ends the substitution at an unbalanced `)`, and escaping the outer quotes needs a `"`),
+# and no line equal to the delimiter (which would end the heredoc early and run what follows).
 HEREDOC_MSG_RE = re.compile(
-    r"(?P<pre>\bgit[ \t]+commit\b[^\n|;&]*?[ \t](?:-[asnvq]*m|--message)[ \t]*=?[ \t]*)"
+    r"(?:^|(?<=[;&|\n]))(?P<pre>[ \t]*git[ \t]+commit(?=[ \t])[^\n|;&'\"\\`$#<>(){}]*?[ \t]"
+    r"(?:-[asnvq]*m|--message)[ \t]*=?[ \t]*)"
     r"\"\$\([ \t]*cat[ \t]+<<(?P<dash>-?)[ \t]*(?P<q>['\"])(?P<d>[A-Za-z_]\w*)(?P=q)[ \t]*\n"
     r"(?P<body>(?:.*\n)*?)\t*(?P=d)\n[ \t]*\)\"")
-COMMIT_MSG_PLACEHOLDER = "'heredoc-message'"
+# Everything before a collapsible commit: plain words and command separators, nothing that opens a
+# quote, escape, comment, substitution, heredoc or group.
+SAFE_PREFIX_RE = re.compile(r"[^'\"\\`$#<>(){}]*")
+COMMIT_MSG_PLACEHOLDER = "heredoc-message"  # unquoted, so a later heredoc message keeps a safe prefix
 
 def collapse_heredoc_messages(cmd: str) -> str:
-    """`cmd` with each literal heredoc commit message replaced by a short quoted placeholder."""
+    """`cmd` with each literal heredoc commit message replaced by a short placeholder word."""
     def repl(m: re.Match) -> str:
         body, d = m.group("body"), m.group("d")
-        if any(x in body for x in SUBSTITUTIONS) or any(line.strip() == d for line in body.split("\n")):
+        if not SAFE_PREFIX_RE.fullmatch(m.string[:m.start()]):
+            return m.group(0)
+        if any(x in body for x in SUBSTITUTIONS) or '"' in body or any(line.strip() == d for line in body.split("\n")):
             return m.group(0)
         if not m.group("dash") and re.search(r"(?m)^\t+" + re.escape(d) + r"$", m.group(0)):
             return m.group(0)  # without <<- a tab-indented delimiter does not end the heredoc
@@ -516,6 +525,11 @@ def _outside_cwd(call: ToolCall) -> bool:
         return False
     return True
 
+def _reads_secret_path(call: ToolCall) -> bool:
+    # a directory named without its trailing slash (`~/.ssh`) still names the secrets directory
+    p = call.path
+    return bool(p and (SECRET_FILE_RE.search(p) or SECRET_FILE_RE.search(p.rstrip("/") + "/")))
+
 def _url_has_secret(call: ToolCall) -> bool:
     return bool(find_secrets(str(call.tool_input.get("url", ""))))
 
@@ -558,7 +572,7 @@ RULES: list[Rule] = [
          _rx(r"\bcrontab\b|\blaunchctl\s+(?:load|bootstrap)|LaunchAgents|>>?\s*~/\.(?:zshrc|bashrc|zprofile|bash_profile)")),
     Rule("kill_broad", BASH, "ask", "Kills many processes at once.", _rx(r"\bkill\s+-9\s+-1\b|\bkillall\b|\bpkill\s+-f\b")),
     # --- file tools ---
-    Rule("read_secret_file", READS, "block", "Reads or searches a credentials or secrets file.", predicate=lambda c: bool(SECRET_FILE_RE.search(c.path))),
+    Rule("read_secret_file", READS, "block", "Reads or searches a credentials or secrets file.", predicate=_reads_secret_path),
     Rule("write_secret", FILES, "block", "Writes a secret-shaped string (API key, token, private key) into a file.", predicate=_secret_in_write),
     Rule("write_system_or_auth", FILES, "block", "Writes to a system or SSH authorization file.",
          predicate=lambda c: bool(re.search(r"^/etc/|/\.ssh/authorized_keys$|^/System/|^/usr/", c.path))),

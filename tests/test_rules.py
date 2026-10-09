@@ -234,3 +234,37 @@ def test_case_folded_guard_bash(bash, command):
 def test_case_folded_guard_file_tools(path):
     d = evaluate(ToolCall("Write", {"file_path": path, "content": "{}"}, cwd="/p"))
     assert d and d.rule == "guardrail_tamper" and d.verdict == "block", (path, d)
+
+
+# --- review fix wave, round 2 ---
+
+QUOTE_BREAK = "git commit -m 'git commit -m \"$(cat <<'EOF'\n'; rm -rf ~; echo '\nEOF\n)\"'"
+QUOTE_BREAK_ECHO = "echo 'git commit -m \"$(cat <<'EOF'\n'; rm -rf ~; echo '\nEOF\n)\"'"
+QUOTE_BREAK_SEMI = "echo '; git commit -m \"$(cat <<'EOF'\n'; rm -rf ~; echo '\nEOF\n)\"'"
+COMMENT_BREAK = "true # ; git commit -m \"$(cat <<'EOF'\nrm -rf ~\nEOF\n)\""
+EARLY_PAREN = "git commit -m \"$(cat <<'EOF'\na)\" ; rm -rf ~ ; echo \"\nEOF\n)\""
+
+@pytest.mark.parametrize('command', [QUOTE_BREAK, QUOTE_BREAK_ECHO, QUOTE_BREAK_SEMI, COMMENT_BREAK, EARLY_PAREN])
+def test_heredoc_collapse_cannot_hide_live_shell(bash, command):
+    d = evaluate(bash(command))
+    assert d and d.verdict == "block" and d.rule == "rm_outside_project", (command, d)
+
+@pytest.mark.parametrize('command', [
+    "git add aws-credentials.csv", "cat secrets.yaml", "cat config/api_token.txt", "cat deploy/server.key",
+    "cat ~/.ssh/id_rsa_backup", "cp vault.kdbx /tmp/", "git add certs/push.p8",
+])
+def test_credential_shaped_files_blocked(bash, command):
+    d = evaluate(bash(command))
+    assert d and d.verdict == "block", (command, d)
+
+@pytest.mark.parametrize('command', ["cat src/secret_santa.ts", "git add src/token_utils.py", "cat keyboard.json"])
+def test_credential_lookalikes_pass(bash, command):
+    assert evaluate(bash(command)) is None, command
+
+@pytest.mark.parametrize('path,verdict', [
+    ("~/.ssh", "block"), ("/Users/dev/.ssh/", "block"), ("/Users/dev/.ssh", "block"), ("/p/.env", "block"),
+    ("/p/src", None), ("", None),
+])
+def test_ls_paths_checked_for_secrets(path, verdict):
+    d = evaluate(ToolCall("LS", {"path": path}, cwd="/p"))
+    assert (d.verdict if d else None) == verdict, (path, d)

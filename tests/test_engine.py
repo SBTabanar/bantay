@@ -141,3 +141,36 @@ def test_review_wave_broad_or_local_forms_reach_judge(bash):
         fc = FakeClassifier('block')
         d = Engine(fc).decide(bash(command))
         assert d.source != 'allowlist' and d.verdict != 'allow', (command, d)
+
+
+def test_round_2_attacks_never_allowlisted(bash):
+    from bantay.engine import routine_git
+    QUOTE_BREAK = "git commit -m 'git commit -m \"$(cat <<'EOF'\n'; rm -rf ~; echo '\nEOF\n)\"'"
+    QUOTE_BREAK_ECHO = "echo 'git commit -m \"$(cat <<'EOF'\n'; rm -rf ~; echo '\nEOF\n)\"'"
+    QUOTE_BREAK_SEMI = "echo '; git commit -m \"$(cat <<'EOF'\n'; rm -rf ~; echo '\nEOF\n)\"'"
+    COMMENT_BREAK = "true # ; git commit -m \"$(cat <<'EOF'\nrm -rf ~\nEOF\n)\""
+    EARLY_PAREN = "git commit -m \"$(cat <<'EOF'\na)\" ; rm -rf ~ ; echo \"\nEOF\n)\""
+    for command in [QUOTE_BREAK, QUOTE_BREAK_ECHO, QUOTE_BREAK_SEMI, COMMENT_BREAK, EARLY_PAREN,
+                    'git push sub/../../tmp/exfil main', 'git pull sub/../../../tmp/evil main',
+                    'git push sub/remote main', 'git push origin a..b', 'git add aws-credentials.csv']:
+        assert not routine_git(command), command
+        fc = FakeClassifier('block')
+        d = Engine(fc).decide(bash(command))
+        assert d.source != 'allowlist' and d.verdict != 'allow', (command, d)
+
+def test_round_2_routine_forms_stay_allowlisted(bash):
+    for command in [_heredoc_commit("fix shutdown handler", delim='"EOF"'),
+                    "git commit -m \"$(cat <<-'EOF'\n\tfix parser\n\tEOF\n)\"",
+                    _heredoc_commit("handle EOFError on empty stdin"), _heredoc_commit("fix (scope): trim input"),
+                    _heredoc_commit("ok\n\n- bullet one\n- bullet two"),
+                    'git add -- src/a.ts', "git add 'src/my file.ts'", 'git add src/token_utils.py',
+                    'git push origin HEAD', 'git push -u origin feature/x', 'git pull --ff-only origin main']:
+        fc = FakeClassifier('block')
+        d = Engine(fc).decide(bash(command))
+        assert d.source == 'allowlist' and d.verdict == 'allow' and not fc.calls, (command, d)
+
+def test_ls_allowlisted_unless_secret_path():
+    fc = FakeClassifier('block')
+    assert Engine(fc).decide(ToolCall("LS", {"path": "src"}, cwd="/p")).source == "allowlist" and not fc.calls
+    d = Engine(fc).decide(ToolCall("LS", {"path": "~/.ssh"}, cwd="/p"))
+    assert d.verdict == "block" and d.rule == "read_secret_file"
