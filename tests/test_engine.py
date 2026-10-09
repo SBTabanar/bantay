@@ -77,3 +77,18 @@ class _ReasonBoom(FakeClassifier):
 def test_reason_failure_keeps_model_label(bash):
     d = Engine(_ReasonBoom("block")).decide(bash("python cleanup.py --all"))
     assert d.verdict == "block" and d.source == "model" and "reason unavailable" in d.reason, d
+
+def test_bypass_probes_reach_the_model(bash):
+    for cmd in ["echo\nnode x", "ls\nnode exfil.js", "ls\n",
+                'git fetch --upload="sh -c id" .', 'git fetch --upl="sh -c id" .', "git fetch origin",
+                'git fetch-pack --exec="sh -c id" .', "npm run build-and-deploy", "make build-and-push",
+                "tree -o /tmp/x", "git diff --out=/tmp/x"]:
+        fc, call = FakeClassifier("block"), bash(cmd)
+        d = Engine(fc).decide(call)
+        assert d.source == "model" and fc.calls == [call], (cmd, d)
+
+def test_allowlist_routine_after_round_2(bash):
+    for cmd in ["git status", "npm run build", "make test", "ls -la", "git log --oneline -5", "npm test"]:
+        fc = FakeClassifier("block")
+        d = Engine(fc).decide(bash(cmd))
+        assert d.source == "allowlist" and fc.calls == [], (cmd, d)
