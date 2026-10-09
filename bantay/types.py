@@ -20,7 +20,8 @@ class ToolCall:
 
     @property
     def command(self) -> str:
-        return str(self.tool_input.get("command", "") or "")
+        # "value" holds a coerced non-dict input (see __post_init__)
+        return str(self.tool_input.get("command", "") or self.tool_input.get("value", "") or "")
 
     @property
     def path(self) -> str:
