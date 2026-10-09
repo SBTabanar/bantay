@@ -38,7 +38,7 @@ Flags: `--no-model`, `--no-gliner`, `--no-redact`, `--adapter PATH` (default ada
   reports into `.superpowers/sdd/2026-10-09-bantay/`; check those report files and `git log` before redoing anything.
   - T1-2 rules: 3 fix rounds done (head f2cfb26). Round-3 re-review IN FLIGHT. If it reports ≤ minor issues, mark
     T1-2 complete in the ledger; otherwise one more fix round on rules.py/test_rules.py (fresh implementer).
-  - T3-4 classifier/engine: 3 fix rounds done (head e0f09fd). Round-3 re-review IN FLIGHT (quote/backslash option evasion).
+  - T3-4 classifier/engine: COMPLETE (head e0f09fd, round-3 re-review clean).
   - T5-6 server/hook/CLI: COMPLETE (review clean).
   - T7 redactor: committed (8ecb291). T8 proxy: implementer IN FLIGHT (agent writes task-7-8-report.md; expect
     bantay/proxy.py + tests/test_proxy.py + a live `claude -p` verification note in docs/NOTES.md). Needs a review after.
