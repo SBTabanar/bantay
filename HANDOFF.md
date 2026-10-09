@@ -34,12 +34,23 @@ bash demo/run.sh                          # demo setup; see demo/DEMO.md for the
 Flags: `--no-model`, `--no-gliner`, `--no-redact`, `--adapter PATH` (default adapters/bantay-lora once it exists).
 
 ## Status snapshot (update this section at every milestone)
-- 2026-10-09 16:30 — T1-2 rules: round-3 re-review in flight. T3-4 classifier/engine: round-3 re-review pending.
-  T5-6 server/hook/CLI: complete. T7 redactor: committed. T8 proxy: in progress. T9 data: 2,300 rows generated,
-  split+commit in progress. T10 fine-tune: starting (same agent as T9). T11 benchmarks: not started. T12 demo:
-  fix round 1 committed (017ad19), re-review pending. OpenCode adapter: in progress. T13 README/submission: not
-  started. Task 14 (demo-driven engine hardening: allowlist routine git add/commit/pull/push, lease-push to main
-  → block, Grep|Glob in hook matcher) queued after T1-4 close.
+- 2026-10-09 16:45 — CONTROLLER SESSION HIT ITS USAGE LIMIT. Subagents below were still running and write their
+  reports into `.superpowers/sdd/2026-10-09-bantay/`; check those report files and `git log` before redoing anything.
+  - T1-2 rules: 3 fix rounds done (head f2cfb26). Round-3 re-review IN FLIGHT. If it reports ≤ minor issues, mark
+    T1-2 complete in the ledger; otherwise one more fix round on rules.py/test_rules.py (fresh implementer).
+  - T3-4 classifier/engine: 3 fix rounds done (head e0f09fd). Round-3 re-review IN FLIGHT (quote/backslash option evasion).
+  - T5-6 server/hook/CLI: COMPLETE (review clean).
+  - T7 redactor: committed (8ecb291). T8 proxy: implementer IN FLIGHT (agent writes task-7-8-report.md; expect
+    bantay/proxy.py + tests/test_proxy.py + a live `claude -p` verification note in docs/NOTES.md). Needs a review after.
+  - T9+T10 data split + LoRA fine-tune: agent IN FLIGHT (writes task-9-10-report.md; commits data/, scripts/,
+    bantay/bench.py (metrics only), adapters/bantay-lora/, docs/NOTES.md, cli default adapter). Needs a review after.
+  - T12 demo: fix round 1 committed (017ad19); re-review IN FLIGHT.
+  - OpenCode adapter: committed (4d2a6c3), live-verified; review IN FLIGHT.
+  - T11 benchmarks, T13 README/submission, Task 14 engine hardening, final whole-branch review: NOT STARTED.
+- Task 14 scope (ledger ruling): allowlist routine `git add <paths>|commit|pull|push` (non-force/non-delete) in
+  bantay/engine.py; `--force-with-lease origin main|master` → block in rules.py; add `Grep|Glob` to MATCHER in
+  bantay/cli.py and regenerate demo/sample-project/.claude/settings.json; add `.opencode/plugin` paths to the
+  guardrail_tamper rule. Then review.
 
 ## Remaining work, in order
 1. Close T1-2 / T3-4 re-reviews; Task 14 engine hardening (see ledger ruling).
