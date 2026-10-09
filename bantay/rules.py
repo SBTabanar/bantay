@@ -83,10 +83,99 @@ WRAPPERS: dict[str, set[str]] = {
 }
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 
-def _commands(cmd: str, depth: int = 0) -> list[list[str]]:
-    """Word lists of every simple command, with subshell parens and wrappers (see WRAPPERS, plus
-    VAR=x) removed, and `sh -c "..."` / `eval "..."` scripts expanded recursively. A command fed
-    by xargs is reported without the arguments xargs would append."""
+HEREDOC_OP_RE = re.compile(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\([^\s;&|<>()]+)|([^\s;&|<>()'\"`]+))")
+
+def _scan_substitutions(cmd: str, lo: int, hi: int, heredoc: bool) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """(substitution body spans, heredoc body spans) in cmd[lo:hi]. Bodies of $(...) and `...` are found at
+    any nesting depth, inside double quotes and unquoted heredoc bodies too, never inside single quotes or
+    a quoted-delimiter heredoc body (both literal). heredoc=True scans an unquoted heredoc body."""
+    bodies, cuts, pending = [], [], []
+    stack: list[tuple[str, int]] = [("H", lo)] if heredoc else []
+    i = lo
+    while i < hi:
+        ch, top = cmd[i], (stack[-1][0] if stack else None)
+        if top == "'":
+            if ch == "'":
+                stack.pop()
+            i += 1
+            continue
+        if ch == "\\":
+            i += 2
+            continue
+        quoting = top in ('"', "H")
+        if quoting and ch == '"' and top == '"':
+            stack.pop(); i += 1
+            continue
+        if not quoting and ch in "'\"":
+            stack.append((ch, i)); i += 1
+            continue
+        if ch == "`":
+            if top == "`":
+                bodies.append((stack.pop()[1], i))
+            else:
+                stack.append(("`", i + 1))
+            i += 1
+            continue
+        if cmd.startswith("$(", i) and not cmd.startswith("$((", i):
+            stack.append(("$(", i + 2)); i += 2
+            continue
+        if quoting:
+            i += 1
+            continue
+        if ch == "(":
+            stack.append(("(", i))
+        elif ch == ")" and top in ("$(", "("):
+            start = stack.pop()[1]
+            if top == "$(":
+                bodies.append((start, i))
+        elif cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
+            m = HEREDOC_OP_RE.match(cmd, i)
+            if m:
+                delim = next(g for g in m.groups()[1:] if g is not None)
+                pending.append((delim, bool(m.group(1)), m.group(5) is None))
+                i = m.end()
+                continue
+        elif ch == "\n" and pending:
+            pos = i + 1
+            for delim, dash, quoted in pending:
+                start, body_end = pos, hi
+                while pos < hi:
+                    end = cmd.find("\n", pos, hi)
+                    end = hi if end < 0 else end
+                    line = cmd[pos:end]
+                    pos = end + 1
+                    if (line.lstrip("\t") if dash else line) == delim:
+                        body_end = end - len(line)
+                        break
+                cuts.append((start, body_end))
+                if not quoted:
+                    b, c = _scan_substitutions(cmd, start, body_end, True)
+                    bodies += b; cuts += c
+            pending = []
+            i = min(pos, hi)
+            continue
+        i += 1
+    bodies += [(start, hi) for kind, start in stack if kind in ("$(", "`")]  # unterminated
+    return bodies, cuts
+
+def _substitution_bodies(cmd: str) -> list[str]:
+    """Text of every command substitution body in cmd (see _scan_substitutions), heredoc bodies removed."""
+    bodies, cuts = _scan_substitutions(cmd, 0, len(cmd), False)
+    out = []
+    for a, b in bodies:
+        parts, last = [], a
+        for ca, cb in sorted(c for c in cuts if a <= c[0] and c[1] <= b):
+            if ca >= last:
+                parts.append(cmd[last:ca]); last = cb
+        parts.append(cmd[last:b])
+        out.append("".join(parts))
+    return out
+
+def _commands_ex(cmd: str, depth: int = 0, sudo: bool = False, subs: bool = True) -> list[tuple[list[str], bool]]:
+    """(words, runs_as_root) of every simple command, with subshell parens and wrappers (see WRAPPERS, plus
+    VAR=x) removed, `sh -c "..."` / `eval "..."` scripts expanded recursively, and the commands inside
+    $(...) / `...` substitutions added. A command fed by xargs is reported without the arguments xargs
+    would append."""
     out = []
     for seg in _segments(cmd):
         try:
@@ -95,9 +184,11 @@ def _commands(cmd: str, depth: int = 0) -> list[list[str]]:
             words = seg.split()
         words = [w.lstrip("(").rstrip(");") for w in words]
         words = [w for w in words if w]
+        root = sudo
         while words:
             name = os.path.basename(words[0])
             if name in WRAPPERS:
+                root = root or name == "sudo"
                 words = words[1:]
                 while words and words[0].startswith("-") and words[0] != "-":
                     words = words[2:] if words[0] in WRAPPERS[name] else words[1:]
@@ -109,17 +200,23 @@ def _commands(cmd: str, depth: int = 0) -> list[list[str]]:
                 break
         if words and words[0] == "eval":
             if depth < 3:
-                out += _commands(" ".join(words[1:]), depth + 1)
+                out += _commands_ex(" ".join(words[1:]), depth + 1, root)
             continue
         if words and os.path.basename(words[0]) in SHELLS:
             i = next((i for i, w in enumerate(words[1:], 1)
                       if w.startswith("-") and not w.startswith("--") and "c" in w), None)
             if i is not None and i + 1 < len(words) and depth < 3:
-                out += _commands(words[i + 1], depth + 1)
+                out += _commands_ex(words[i + 1], depth + 1, root)
                 continue
         if words:
-            out.append(words)
+            out.append((words, root))
+    if subs and depth < 3:
+        for body in _substitution_bodies(cmd):
+            out += _commands_ex(body, depth + 1, sudo, subs=False)  # bodies are already flattened
     return out
+
+def _commands(cmd: str, depth: int = 0) -> list[list[str]]:
+    return [words for words, _ in _commands_ex(cmd, depth)]
 
 GREP_CMDS = {"grep", "egrep", "fgrep", "rg", "ag", "ack"}
 GREP_VALUE_FLAGS = {"-A", "-B", "-C", "-m", "-g", "-t", "-T", "-f", "--file", "--glob", "--type", "--max-count", "--context"}
@@ -202,6 +299,8 @@ def collapse_heredoc_messages(cmd: str) -> str:
         return cmd
     if not m.group("dash") and re.search(r"(?m)^\t+" + re.escape(d) + r"$", m.group(0)):
         return cmd  # without <<- a tab-indented delimiter does not end the heredoc
+    if not COMMIT_SUFFIX_RE.fullmatch(cmd[m.end():]):
+        return cmd  # a tail like `&& git log -1 --format=%B | sh` could run the message
     return m.group("pre") + COMMIT_MSG_PLACEHOLDER + " " + cmd[m.end():]  # space: a glued `cmd` stays a separate word
 
 # Heredoc commits the strict collapse refuses (a chained `git add … &&` prefix, or a body holding ( ) ' as in
@@ -213,6 +312,9 @@ def collapse_heredoc_messages(cmd: str) -> str:
 # absent, a `)` that ends the substitution early leaves the rest of the body inside the outer double quotes
 # (still a literal), and an apostrophe is a syntax error that runs nothing.
 COMMIT_PREFIX_RE = re.compile(r"(?:[ \t]*(?:(?:git|cd)(?:[ \t]+[\w./@:+,%-]+)*[ \t]*)?(?:&&|;|\n))*[ \t]*")
+# What may follow the closing `)"`: nothing, or plain git/cd commands joined by && ; or newline. A pipe
+# (`| sh`) or anything else could run the message, so the soft downgrade does not apply.
+COMMIT_SUFFIX_RE = re.compile(r"(?:[ \t]*(?:&&|;|\n)[ \t]*(?:(?:git|cd)(?:[ \t]+[\w./@:+,%-]+)*)?)*[ \t;]*\n?")
 HEREDOC_COMMIT_RE = re.compile(
     r"(?P<pre>git[ \t]+commit(?=[ \t])[^\n|;&'\"\\`$#<>(){}]*?[ \t](?:-[asnvq]*m|--message)[ \t]*=?[ \t]*)"
     r"\"\$\([ \t]*cat[ \t]+<<(?P<dash>-?)[ \t]*(?P<q>['\"])(?P<d>[A-Za-z_]\w*)(?P=q)[ \t]*\n"
@@ -231,6 +333,11 @@ def without_commit_heredoc_body(cmd: str) -> str | None:
     if m.group("tabs") and not m.group("dash"):
         return None  # without <<- a tab-indented delimiter does not end the heredoc
     return cmd[:m.end("pre")] + COMMIT_MSG_PLACEHOLDER + " " + cmd[m.end():]
+
+def commit_heredoc_tail_ok(cmd: str) -> bool:
+    """Is the text after the heredoc commit's closing `)"` empty or plain git/cd commands (COMMIT_SUFFIX_RE)?"""
+    m = HEREDOC_COMMIT_RE.search(cmd)
+    return bool(m and COMMIT_SUFFIX_RE.fullmatch(cmd[m.end():]))
 
 def _commit_message_flag(w: str) -> int:
     """Words consumed by a commit message option at w (2 = option + value, 1 = attached value), else 0."""
@@ -282,16 +389,33 @@ HOME_VAR_RE = re.compile(r"\$\{HOME\}|\$HOME(?!\w)")
 REDIRECT_RE = re.compile(r"^(?:\d*|&)[<>]")
 BARE_REDIRECT_RE = re.compile(r"(?:\d*|&)(?:>>?|<)&?")
 
+PWD_RE = re.compile(r"\$\(\s*pwd\s*\)|`\s*pwd\s*`|\$\{PWD\}|\$PWD(?!\w)")
+SUBST_TARGET = "__bantay_subst__"
+
+def _subst_target(prefix: str) -> str:
+    """An rm target whose tail is an unknown expansion: inside only when its literal prefix names an
+    in-project path (build/$(x), dist-${V}); a bare or dots-only prefix ($(x), ./$(x), ../$(x)) is outside."""
+    return prefix + SUBST_TARGET if prefix.replace(".", "").replace("/", "") else "/"
+
 def _rm_invocations(call: ToolCall) -> list[list[str]]:
-    """Normalized targets of every recursive rm (quotes stripped, $HOME/${HOME} -> ~)."""
-    found = []
-    for part in RM_SPLIT_RE.split(_literal_scan_text(call.command)):
+    """Normalized targets of every recursive rm (quotes stripped, $HOME/${HOME} -> ~, $(pwd)/$PWD -> cwd).
+    A target holding a $(...), `...` or ${...} expansion is resolved by _subst_target."""
+    found, text = [], _literal_scan_text(call.command)
+    text = PWD_RE.sub(lambda m: call.cwd or ".", text)
+    seps = list(RM_SPLIT_RE.finditer(text))
+    starts = [0] + [m.end() for m in seps]
+    for k, a in enumerate(starts):
+        b = seps[k].start() if k < len(seps) else len(text)
+        part, sep = text[a:b], (seps[k].group(0) if k < len(seps) else "")
+        # does an expansion open right where this part was cut? ($( or an opening backtick)
+        opens = (sep == "(" and part.endswith("$")) or (sep == "`" and text[:b].count("`") % 2 == 0)
         words = [HOME_VAR_RE.sub("~", re.sub(r"[\"'`\\]", "", w)) for w in part.split()]
         idx = next((i for i, w in enumerate(words) if w == "rm" or w.endswith("/rm")), None)
         if idx is None:
             continue
-        recursive, targets, opts_done, skip = False, [], False, False
+        recursive, targets, opts_done, skip, last_target = False, [], False, False, False
         for w in words[idx + 1:]:
+            last_target = False
             if skip:
                 skip = False
             elif REDIRECT_RE.match(w):
@@ -302,7 +426,14 @@ def _rm_invocations(call: ToolCall) -> list[list[str]]:
                 if w == "--recursive" or (not w.startswith("--") and ("r" in w or "R" in w)):
                     recursive = True
             elif w:
-                targets.append(w)
+                targets.append(_subst_target(w[:w.index("${")]) if "${" in w else w)
+                last_target = True
+        if opens:
+            glued = last_target and not part[-1:].isspace()
+            if glued and targets[-1] != "/":
+                targets[-1] = _subst_target(targets[-1].removesuffix("$"))
+            else:
+                targets.append("/")
         if recursive:
             found.append(targets)
     return found
@@ -490,10 +621,46 @@ def _guardrail_tamper(call: ToolCall) -> bool:
 # `cp .env.example .env` seeds a new env file from a template; it reads no secrets.
 TEMPLATE_COPY_RE = re.compile(r"\b(?:cp|mv)\s+(?:-\w+\s+)*\S*\.env\.(?:example|sample|template)\s+\S+")
 
-def _secret_file_access(call: ToolCall) -> bool:
-    return bool(SECRET_FILE_RE.search(TEMPLATE_COPY_RE.sub(" ", _literal_scan_text(call.command))))
+# `scp -i ~/.ssh/id_ed25519 ...` uses the key as an identity; it does not read it out. Only in a segment
+# whose command is ssh/scp/sftp/rsync/git (rsync -e "ssh -i k", GIT_SSH_COMMAND="ssh -i k" git ...).
+IDENTITY_CMDS = {"ssh", "scp", "sftp", "rsync", "git"}
+IDENTITY_ARG_RE = re.compile(r"(?<![^\s'\"])(?:-i[ \t]*|-o[ \t]*IdentityFile[= \t])['\"]?[^\s'\"]+['\"]?")
 
-DISK_RE = _rx(r"\b(?:mkfs(?:\.\w+)?|diskutil\s+(?:erase|reformat)|shutdown|reboot|halt)\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:")
+def _without_identity_args(text: str) -> str:
+    out, last = [], 0
+    for a, b in _segment_spans(text):
+        words = _words(text[a:b])
+        if words and os.path.basename(words[0]) in IDENTITY_CMDS:
+            out += [text[last:a], IDENTITY_ARG_RE.sub(" ", text[a:b])]
+            last = b
+    out.append(text[last:])
+    return "".join(out)
+
+def _secret_file_access(call: ToolCall) -> bool:
+    text = TEMPLATE_COPY_RE.sub(" ", _literal_scan_text(call.command))
+    return bool(SECRET_FILE_RE.search(_without_identity_args(text)))
+
+DISK_RE = _rx(r"\bmkfs(?:\.\w+)?\b|\bdiskutil\s+(?:erase\w*|reformat|zeroDisk|randomDisk|secureErase|partitionDisk"
+              r"|apfs\s+delete(?:Container|Volume))\b|\bsystemctl\s+(?:reboot|poweroff|halt)\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:")
+# shutdown/reboot/halt/poweroff only in command position (`xcrun simctl shutdown all`, `celery ... control
+# shutdown` are not the machine): the start of a line or segment, inside $( or `, after sudo, or /sbin/<name>.
+POWER_CMDS = {"shutdown", "reboot", "halt", "poweroff"}
+POWER_RE = _rx(
+    r"(?:(?:^|[;&|`]|\$\()[ \t]*(?:sudo(?:[ \t]+-\S+)*[ \t]+)?|\bsudo(?:[ \t]+-\S+)*[ \t]+|(?<![\w/.-])/(?:usr/)?s?bin/)"
+    r"(?:\S*/)?(?:shutdown|reboot|halt|poweroff)\b(?![ \t]*=)")
+
+POWER_WORD_RE = _rx(r"\b(?:shutdown|reboot|halt)\b")
+HEREDOC_COMMIT_HINT_RE = re.compile(r"\bgit\s+commit\b[\s\S]*<<")
+
+def _disk_or_system(call: ToolCall) -> bool:
+    text = _literal_scan_text(call.command)
+    if DISK_RE.search(text) or POWER_RE.search(text):
+        return True
+    # Inside a heredoc commit the strict collapse refused, the word itself still counts: `evaluate` softens
+    # it to ask when the message is plain text, and keeps the block when the shape could run the body.
+    if HEREDOC_COMMIT_HINT_RE.search(call.command) and POWER_WORD_RE.search(text):
+        return True
+    return any(os.path.basename(words[0]) in POWER_CMDS for words in _commands(call.command))
 SQL_DESTROY_RE = _rx(r"\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA)|TRUNCATE(?:\s+TABLE)?\s+\w+|DELETE\s+FROM\s+\w+\s*(?:;|[\"']|$))")
 PIPE_INTO_RE = _rx(
     r"\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\b(?:\s+-\S+)*\s+)?(?:env\s+)?(?:\S*/)?"
@@ -527,8 +694,63 @@ ENV_DUMP_RE = re.compile(
     r"(?:^|[;&|(`])\s*(?:printenv\b|(?:env|set)\s*(?:$|[;&|)`]))"
     r"|\b(?:echo|printf)\b[^|;&\n]*\$\{?[A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|PASS|CREDENTIAL)", re.MULTILINE)
 
+SUDO_DESTRUCTIVE_RE = re.compile(r"\bsudo(?:\s+-\S+)*\s+(?:\S*/)?(?:rm|dd|mkfs(?:\.\w+)?|kill|launchctl|shutdown|reboot|halt)\b")
+SUDO_ALWAYS = {"rm", "dd", "kill", "launchctl", "shutdown", "reboot", "halt", "poweroff"}
+# The system directories themselves (and their core children). `sudo mkdir -p /opt/myapp` or
+# `sudo cp tool /usr/local/bin` are not this; they stay with the ask-tier `sudo` rule.
+SYSTEM_DIR_RE = re.compile(r"^/(?:etc|bin|sbin|System(?:/Library)?|Library|var(?:/(?:db|root|lib))?|private(?:/(?:etc|var))?"
+                           r"|usr(?:/(?:bin|sbin|lib|libexec|share|include))?)?$")
+SYS_ANY_OPERAND = {"mv", "mkdir", "rmdir", "tee", "chmod", "chown", "chgrp", "truncate"}
+SYS_DEST_OPERAND = {"cp", "ln", "install", "rsync", "ditto"}  # only the destination is overwritten
+
+def _norm_path(p: str) -> str:
+    return re.sub(r"^/+", "/", posixpath.normpath(p)) if p.startswith("/") else p
+
 def _sudo_destructive(call: ToolCall) -> bool:
-    return bool(re.search(r"\bsudo\b.*\b(?:rm|dd|mkfs|chmod|chown|kill|launchctl|shutdown|reboot)\b", call.command))
+    if SUDO_DESTRUCTIVE_RE.search(call.command):  # also inside a quoted remote command (ssh host 'sudo rm ...')
+        return True
+    for words, root in _commands_ex(call.command):
+        if not root:
+            continue
+        name = os.path.basename(words[0])
+        if name in SUDO_ALWAYS or name.startswith("mkfs"):
+            return True
+        pos = [_norm_path(a) for a in words[1:] if not a.startswith("-")]
+        if name in SYS_ANY_OPERAND and any(SYSTEM_DIR_RE.match(a) for a in pos):
+            return True
+        if name in SYS_DEST_OPERAND and pos and SYSTEM_DIR_RE.match(pos[-1]):
+            return True
+    return False
+
+# sudoers and the account/auth databases: a write by any means is a privilege-escalation or lockout
+AUTH_FILE_RE = re.compile(r"^(?:/private)?/etc/(?:sudoers(?:\.d(?:/.*)?)?|passwd|shadow|master\.passwd|group|pam\.d(?:/.*)?)$")
+AUTH_WRITE_RE = re.compile(
+    r"(?:>>?\|?|(?:^|[|;&`'\"\n]|\$\(|\bsudo)(?:\s+-\S+)*\s*tee\b[^|;&\n<>]*?\s)\s*['\"]?(?:/private)?/etc/"
+    r"(?:sudoers|passwd\b|shadow\b|master\.passwd\b|group\b|pam\.d/)"
+    r"|\b(?:SUDO_EDITOR|VISUAL|EDITOR)=[^;&|\n]*\bvisudo\b", re.M)
+IN_PLACE_FLAG_RE = re.compile(r"^(?:--in-place|-[A-Za-z]*i)")
+
+def _writes_auth_file(call: ToolCall) -> bool:
+    if AUTH_WRITE_RE.search(_literal_scan_text(call.command)):
+        return True
+    auth = lambda w: bool(AUTH_FILE_RE.match(_norm_path(w)))
+    for words in _commands(call.command):
+        name, args = os.path.basename(words[0]), words[1:]
+        for i, w in enumerate(words):
+            if ">" in w:
+                target = w.rsplit(">", 1)[1].lstrip("|") or (words[i + 1] if i + 1 < len(words) else "")
+                if target and auth(target):
+                    return True
+        pos = [a for a in args if not a.startswith("-")]
+        if name == "tee" and any(auth(a) for a in pos):
+            return True
+        if name in SYS_DEST_OPERAND | {"mv"} and pos and auth(pos[-1]):
+            return True
+        if name == "dd" and any(a.startswith("of=") and auth(a[3:]) for a in args):
+            return True
+        if name in IN_PLACE and any(IN_PLACE_FLAG_RE.match(a) for a in args) and any(auth(a) for a in pos):
+            return True
+    return False
 
 def _secret_in_write(call: ToolCall) -> bool:
     body = "\n".join(str(call.tool_input.get(k, "")) for k in ("content", "new_string")) + \
@@ -568,10 +790,12 @@ RULES: list[Rule] = [
     Rule("env_dump", BASH, "block", "Prints environment variables, which usually contain secrets.", ENV_DUMP_RE),
     Rule("keychain_dump", BASH, "block", "Reads passwords from the system keychain.",
          _rx(r"\bsecurity\s+(?:find-(?:generic|internet)-password|dump-keychain|export)\b")),
+    Rule("write_auth_file", BASH, "block", "Writes sudoers or a system account file (privilege escalation).",
+         predicate=_writes_auth_file),
     # --- destruction (block) ---
     Rule("rm_outside_project", BASH, "block", "Recursive delete of a path outside the project (home, root, parent, wildcard).", predicate=_rm_outside),
     Rule("disk_or_system", BASH, "block", "Wipes a disk or shuts down the machine.",
-         predicate=lambda c: bool(DISK_RE.search(_literal_scan_text(c.command)))),
+         predicate=_disk_or_system),
     Rule("sudo_destructive", BASH, "block", "Destructive command run as root.", predicate=_sudo_destructive),
     Rule("chmod_777", BASH, "block", "Makes files world-writable.", _rx(r"\bchmod\s+(?:-R\s+)?(?:a\+rwx|0?777)\b")),
     Rule("sql_destroy", BASH, "block", "Drops or truncates a database table, or deletes every row.",
@@ -628,6 +852,8 @@ def evaluate(call: ToolCall) -> Decision | None:
                 outside = _first_match(replace(call, tool_input={**call.tool_input, "command": stripped}))
                 if outside:
                     return _decision(outside)
+                if not commit_heredoc_tail_ok(call.command):  # `)" | sh` could run the message
+                    return _decision(first)
                 return Decision("ask", COMMIT_BODY_REASON, "rule", rule=first.name)
         return _decision(first)
     except Exception as e:  # rules must never crash the judge
