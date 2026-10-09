@@ -22,8 +22,9 @@ SECRET_FILE_RE = re.compile(
     r"|\.claude/\.credentials\.json|\.config/gh/hosts\.yml|/secrets?\.(?:ya?ml|json)\b|service[_\-]?account[^\s]*\.json"
     # credential-shaped file names: the secret word is the whole stem or a -/_ separated word
     # (aws-credentials.csv, secrets.yaml, token.json, api_token.txt; not tokenizer.json, design-tokens.json),
-    # outside CI workflows, docs, test fixtures and node_modules
-    r"|(?i:(?:^|(?<=[\s\"'=]))(?!(?:[^\s\"']*/)?(?:\.github/workflows|docs|tests/fixtures|node_modules)/)"
+    # outside CI workflows, docs, test fixtures and node_modules (the exclusion is void when the path has a
+    # `../` segment: docs/../api_token.txt is ./api_token.txt)
+    r"|(?i:(?:^|(?<=[\s\"'=]))(?!(?![^\s\"']*\.\./)(?:[^\s\"']*/)?(?:\.github/workflows|docs|tests/fixtures|node_modules)/)"
     r"(?:[^\s\"']*/)?(?:[\w.]*[-_])?(?:credentials?|secrets?|token|passwords?|passwd|private[-_]?key)(?:[-_][\w-]*)?"
     r"\.(?:csv|json|txt|ya?ml|env|pem|key)(?=$|[\s\"'|;&:)<>]))"
     r"|(?i:\.(?:key|p8|p12|pfx|kdbx)(?=$|[\s\"'|;&:)<>]))|\bid_(?:rsa|dsa|ecdsa|ed25519)[\w.-]*)"

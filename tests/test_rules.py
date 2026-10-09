@@ -328,3 +328,81 @@ def test_round_3_credential_filenames(bash, name, secret):
     assert (d is not None and d.verdict == "block") == secret, (name, d)
     d = evaluate(ToolCall("Read", {"file_path": f"/p/{name}"}, cwd="/p"))
     assert (d is not None and d.rule == "read_secret_file") == secret, (name, d)
+
+
+# --- review fix wave, round 4: soft verdict for sensitive words inside a heredoc commit message ---
+from bantay.rules import COMMIT_BODY_REASON
+
+def _hc(body, pre="", post="", delim="'EOF'"):
+    return f"{pre}git commit -m \"$(cat <<{delim}\n{body}\n{delim.strip(chr(39) + chr(34))}\n)\"{post}"
+
+CLAUDE_TRAILER = ("\n\nGenerated with [Claude Code](https://claude.com/claude-code)\n\n"
+                  "Co-Authored-By: Claude <noreply@anthropic.com>")
+
+@pytest.mark.parametrize('command,rule', [
+    (_hc("fix shutdown handler", pre="git add a.ts && "), "disk_or_system"),
+    (_hc("feat(server): graceful shutdown"), "disk_or_system"),
+    (_hc("don't halt on empty input"), "disk_or_system"),
+    (_hc("fix reboot loop" + CLAUDE_TRAILER), "disk_or_system"),
+    (_hc("docs: explain DROP TABLE guard (sql_destroy)"), "sql_destroy"),
+    (_hc("feat(server): graceful shutdown", pre="git add a.ts b.ts && ", delim='"EOF"'), "disk_or_system"),
+    (_hc("stop reading .env in tests (ci)", pre="git add a.ts && "), "secret_file_access"),
+    (_hc("fix reboot loop" + CLAUDE_TRAILER, pre="cd /Users/dev/proj && git add -A && "), "disk_or_system"),
+])
+def test_round_4_sensitive_words_in_commit_body_ask(bash, command, rule):
+    d = evaluate(bash(command))
+    assert d and d.verdict == "ask" and d.rule == rule and d.reason == COMMIT_BODY_REASON, (command, d)
+
+def test_round_4_plain_heredoc_commit_still_none(bash):
+    assert evaluate(bash(_hc("fix shutdown handler"))) is None
+
+@pytest.mark.parametrize('command,rule', [
+    # matches outside the message keep their block verdict
+    (_hc("ok", post="; rm -rf ~"), "rm_outside_project"),
+    (_hc("feat(x): shutdown", post="; shutdown -h now"), "disk_or_system"),
+    (_hc("feat(x): shutdown", pre="git add a.ts && ", post="\nshutdown -h now"), "disk_or_system"),
+    (_hc("feat(x): graceful shutdown", post=" && psql -c 'DROP TABLE users'"), "sql_destroy"),
+    (_hc("feat(x): shutdown", pre="git add .env && "), "secret_file_git_add"),
+    (_hc("feat(x): drop shutdown and chmod 777"), "chmod_777"),  # a non-soft block in the body stays a block
+    # anything before the commit that could rebind `cat`, or that is not a plain git/cd command
+    (_hc("feat(x): shutdown", pre="hash -p /bin/sh cat; "), "disk_or_system"),
+    (_hc("feat(x): shutdown", pre="alias cat=sh\n"), "disk_or_system"),
+    (_hc("feat(x): shutdown", pre="X=1 "), "disk_or_system"),
+    (_hc("feat(x): shutdown", pre="PATH=/tmp/e:/bin\n"), "disk_or_system"),
+    (_hc("feat(x): shutdown", pre="echo \"a\" && "), "disk_or_system"),
+    # bodies that are not plain text: substitution, quotes, backslash, early delimiter, unquoted delimiter
+    (_hc("a)\n$(shutdown -h now)"), "disk_or_system"),
+    (_hc("a)\n`shutdown -h now`"), "disk_or_system"),
+    (_hc("fix (x)\n\" ; shutdown -h now ; echo \""), "disk_or_system"),
+    (_hc("fix (x) \\\nshutdown"), "disk_or_system"),
+    (_hc("x\nEOF\nshutdown -h now"), "disk_or_system"),
+    (_hc("x (y)\nEOF)\nshutdown -h now"), "disk_or_system"),
+    (_hc("fix (shutdown)", pre="git add a.ts && ", delim="EOF"), "disk_or_system"),
+    ("git commit -m \"$(cat <<'EOF'\nfeat(x): shutdown\n\tEOF\n)\"\nEOF\n)\"", "disk_or_system"),
+])
+def test_round_4_outside_or_unsafe_still_blocked(bash, command, rule):
+    d = evaluate(bash(command))
+    assert d and d.verdict == "block" and d.rule == rule, (command, d)
+
+@pytest.mark.parametrize('command', [
+    "git commit -m \"$(cat <<'EOF'\nok\nEOF\n)\"`rm -rf ~`",
+    "git commit -m x`rm -rf ~`",
+])
+def test_round_4_backtick_glued_rm_blocked(bash, command):
+    d = evaluate(bash(command))
+    assert d and d.verdict == "block" and d.rule == "rm_outside_project", (command, d)
+
+@pytest.mark.parametrize('name', [
+    "docs/../api_token.txt", "node_modules/../aws-credentials.csv", "./docs/../token.json", "x/docs/../../token.json",
+])
+def test_round_4_traversal_voids_credential_path_exclusion(bash, name):
+    d = evaluate(bash(f"cat {name}"))
+    assert d and d.verdict == "block", (name, d)
+    d = evaluate(ToolCall("Read", {"file_path": name}, cwd="/p"))
+    assert d and d.rule == "read_secret_file", (name, d)
+    d = evaluate(ToolCall("Read", {"file_path": f"/p/{name}"}, cwd="/p"))
+    assert d and d.rule == "read_secret_file", (name, d)
+
+def test_round_4_excluded_credential_path_without_traversal_passes(bash):
+    assert evaluate(bash("cat docs/api_token.txt")) is None
+    assert evaluate(ToolCall("Read", {"file_path": "/p/docs/api_token.txt"}, cwd="/p")) is None

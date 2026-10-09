@@ -185,3 +185,9 @@ def test_round_3_heredoc_commits_go_to_the_model(bash):
         fc = FakeClassifier('allow')
         d = Engine(fc).decide(bash(command))
         assert d.source == 'model' and fc.calls, (command, d)
+
+def test_round_4_sensitive_commit_body_asks_without_the_model(bash):
+    fc = FakeClassifier('allow')
+    cmd = "git add a.ts && git commit -m \"$(cat <<'EOF'\nfeat(server): graceful shutdown\nEOF\n)\""
+    d = Engine(fc).decide(bash(cmd))
+    assert d.verdict == 'ask' and d.source == 'rule' and d.rule == 'disk_or_system' and not fc.calls, d

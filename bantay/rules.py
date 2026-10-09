@@ -1,6 +1,6 @@
 from __future__ import annotations
-import json, os, re, shlex
-from dataclasses import dataclass
+import json, os, posixpath, re, shlex
+from dataclasses import dataclass, replace
 from typing import Callable
 from .types import ToolCall, Decision, Verdict
 from .secrets import SECRET_FILE_RE, find_secrets
@@ -202,7 +202,35 @@ def collapse_heredoc_messages(cmd: str) -> str:
         return cmd
     if not m.group("dash") and re.search(r"(?m)^\t+" + re.escape(d) + r"$", m.group(0)):
         return cmd  # without <<- a tab-indented delimiter does not end the heredoc
-    return m.group("pre") + COMMIT_MSG_PLACEHOLDER + cmd[m.end():]
+    return m.group("pre") + COMMIT_MSG_PLACEHOLDER + " " + cmd[m.end():]  # space: a glued `cmd` stays a separate word
+
+# Heredoc commits the strict collapse refuses (a chained `git add … &&` prefix, or a body holding ( ) ' as in
+# `feat(server): …` or Claude Code's `[Claude Code](https://…)` trailer) are still scanned raw. `evaluate`
+# uses this span only to soften a word-level block (shutdown, DROP TABLE, .env) found inside the body to ask.
+# The body counts as text only when nothing before the commit can rebind `cat` (only `git` / `cd` commands
+# of plain words), the `"$(` sits at top level (no quote before it), the delimiter is quoted, no body line
+# starts with the delimiter, and the body holds none of $ ` " \. Checked on bash 3.2 and zsh 5.9: with those
+# absent, a `)` that ends the substitution early leaves the rest of the body inside the outer double quotes
+# (still a literal), and an apostrophe is a syntax error that runs nothing.
+COMMIT_PREFIX_RE = re.compile(r"(?:[ \t]*(?:(?:git|cd)(?:[ \t]+[\w./@:+,%-]+)*[ \t]*)?(?:&&|;|\n))*[ \t]*")
+HEREDOC_COMMIT_RE = re.compile(
+    r"(?P<pre>git[ \t]+commit(?=[ \t])[^\n|;&'\"\\`$#<>(){}]*?[ \t](?:-[asnvq]*m|--message)[ \t]*=?[ \t]*)"
+    r"\"\$\([ \t]*cat[ \t]+<<(?P<dash>-?)[ \t]*(?P<q>['\"])(?P<d>[A-Za-z_]\w*)(?P=q)[ \t]*\n"
+    r"(?P<body>(?:.*\n)*?)(?P<tabs>\t*)(?P=d)\n[ \t]*\)\"")
+TEXT_BODY_UNSAFE_RE = re.compile(r"[$`\"\\]")
+
+def without_commit_heredoc_body(cmd: str) -> str | None:
+    """`cmd` with a literal heredoc commit message (see HEREDOC_COMMIT_RE) replaced by a placeholder word,
+    or None when the command has no such message."""
+    m = HEREDOC_COMMIT_RE.search(cmd)
+    if not m or not COMMIT_PREFIX_RE.fullmatch(cmd[:m.start()]):
+        return None
+    body, d = m.group("body"), m.group("d")
+    if TEXT_BODY_UNSAFE_RE.search(body) or any(re.match(r"\t*" + re.escape(d) + r"(?!\w)", line) for line in body.split("\n")):
+        return None
+    if m.group("tabs") and not m.group("dash"):
+        return None  # without <<- a tab-indented delimiter does not end the heredoc
+    return cmd[:m.end("pre")] + COMMIT_MSG_PLACEHOLDER + " " + cmd[m.end():]
 
 def _commit_message_flag(w: str) -> int:
     """Words consumed by a commit message option at w (2 = option + value, 1 = attached value), else 0."""
@@ -249,7 +277,7 @@ def _literal_scan_text(cmd: str) -> str:
 
 # --- rm ---
 
-RM_SPLIT_RE = re.compile(r"[;&|()\n]")  # also splits inside quotes, so `bash -c "cd x && rm -rf ~"` is seen
+RM_SPLIT_RE = re.compile(r"[;&|()\n`]")  # also splits inside quotes, so `bash -c "cd x && rm -rf ~"` and `x`rm -rf ~`` are seen
 HOME_VAR_RE = re.compile(r"\$\{HOME\}|\$HOME(?!\w)")
 REDIRECT_RE = re.compile(r"^(?:\d*|&)[<>]")
 BARE_REDIRECT_RE = re.compile(r"(?:\d*|&)(?:>>?|<)&?")
@@ -519,7 +547,7 @@ def _outside_cwd(call: ToolCall) -> bool:
 def _reads_secret_path(call: ToolCall) -> bool:
     # a directory named without its trailing slash (`~/.ssh`) still names the secrets directory
     p = call.path
-    return bool(p and (SECRET_FILE_RE.search(p) or SECRET_FILE_RE.search(p.rstrip("/") + "/")))
+    return bool(p and any(SECRET_FILE_RE.search(x) for x in (p, p.rstrip("/") + "/", posixpath.normpath(p))))
 
 def _url_has_secret(call: ToolCall) -> bool:
     return bool(find_secrets(str(call.tool_input.get("url", ""))))
@@ -573,11 +601,34 @@ RULES: list[Rule] = [
     Rule("fetch_with_secret", ("WebFetch",), "block", "URL contains a secret.", predicate=_url_has_secret),
 ]
 
+# Word-level rules that a heredoc commit message can trip by merely naming the command.
+SOFT_IN_COMMIT_BODY = {"disk_or_system", "sql_destroy", "secret_file_access"}
+COMMIT_BODY_REASON = "Commit message mentions a sensitive command; confirm."
+
+def _first_match(call: ToolCall) -> Rule | None:
+    return next((r for r in RULES if r.matches(call)), None)
+
+def _decision(rule: Rule) -> Decision:
+    return Decision(rule.verdict, rule.reason, "rule", rule=rule.name)
+
 def evaluate(call: ToolCall) -> Decision | None:
     try:
-        for rule in RULES:
-            if rule.matches(call):
-                return Decision(rule.verdict, rule.reason, "rule", rule=rule.name)
+        first = _first_match(call)
+        if first is None:
+            return None
+        if first.name in SOFT_IN_COMMIT_BODY and call.tool_name == "Bash":
+            stripped = without_commit_heredoc_body(call.command)
+            if stripped is not None:
+                # any other block rule keeps its verdict; a soft rule keeps it when it also matches outside
+                # the message (prefix, or the tail after `)"`); a match only inside the message asks
+                hard = next((r for r in RULES if r.verdict == "block" and r.name not in SOFT_IN_COMMIT_BODY
+                             and r.matches(call)), None)
+                if hard:
+                    return _decision(hard)
+                outside = _first_match(replace(call, tool_input={**call.tool_input, "command": stripped}))
+                if outside:
+                    return _decision(outside)
+                return Decision("ask", COMMIT_BODY_REASON, "rule", rule=first.name)
+        return _decision(first)
     except Exception as e:  # rules must never crash the judge
         return Decision("ask", f"rule engine error: {e}", "error")
-    return None
