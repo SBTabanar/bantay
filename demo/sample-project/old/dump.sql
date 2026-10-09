@@ -9,6 +9,6 @@ CREATE TABLE `refunds` (
   PRIMARY KEY (`id`)
 );
 INSERT INTO `refunds` VALUES
-  (1,'Maria Clara Santos','0917-555-0101',450.00,'GC-0001'),
-  (2,'Jose Rizal Mercado','0918-555-0102',1200.00,'GC-0002'),
-  (3,'Andres Bonifacio Reyes','0919-555-0103',89.50,NULL);
+  (1,'Maria Clara Santos','0917-000-0001',450.00,'GC-0001'),
+  (2,'Jose Rizal Mercado','0918-000-0002',1200.00,'GC-0002'),
+  (3,'Andres Bonifacio Reyes','0919-000-0003',89.50,NULL);
