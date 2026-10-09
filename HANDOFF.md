@@ -42,14 +42,17 @@ bash demo/run.sh                          # demo setup; see demo/DEMO.md for the
 Flags: `--no-model`, `--no-gliner`, `--no-redact`, `--adapter PATH` (default adapters/bantay-lora once it exists).
 
 ## Status snapshot (update this section at every milestone)
-- 2026-10-09 20:20 PHT — Fable controller resumed as SOLE controller. The Codex/Astra session's uncommitted wave was
-  checkpointed as fb29e3f. Fast suite: 264 passed. Trainer finished: adapters/bantay-lora (800 iters), heldout acc
-  91.3% vs base 33.3%, block recall 93%, false-block 2% (commits e809521, e82df0b).
-  In flight: (1) combined review of c8f92ad..fb29e3f (Task 14 + T8 fixes + Codex fix wave) → fix wave if needed;
-  (2) Task 11 completion: full slow suite, local bench rows, cloud Haiku row, final BENCHMARKS.md;
-  (3) Task 13 docs: README, SUBMISSION.md, demo/VIDEO.md, LICENSE (no push yet).
-  After those: paste final table into README, final whole-branch review + one fix wave, merge build→main,
-  create public repo sbtabanar/bantay and push (push-protection: allow fake keys as test data), live rehearsal.
+- 2026-10-09 ~22:00 PHT — Fable controller, sole. Branch `build` HEAD de241bd. Fast suite 356, node 8, slow suite
+  passed at 299 earlier (adapter loads). DONE: T1-14, OpenCode adapter, benchmarks (6971323), docs (4fb1eec).
+  Wave fix rounds 1-3 done (e12ed1c, fc764d8, de241bd): heredoc commits no longer allowlisted; strict rules-only
+  collapse; credential filenames; push/pull local paths; LS checked; case-folded guard paths; merge_settings refresh.
+  IN FLIGHT: (1) re-review of round 3 (if clean → wave complete); (2) polish agent: README table paste, override
+  analysis bench/override_analysis.md, idle-GPU re-measure of LoRA/full rows.
+  NEXT: final whole-branch review (most capable model) → one fix wave → merge build→main → `gh repo create
+  sbtabanar/bantay --public --source . --push` (push-protection: allow fake keys as test data) → fill SUBMISSION.md
+  links → Sergei rehearses (demo/DEMO.md), records (demo/VIDEO.md), posts.
+  Benchmarks (6971323): LoRA 91.3%/93% recall/2% FB p50 110 ms; full engine 86.7%; cloud Haiku 84.0%/75.9% p50 2.7 s
+  ~$1.32/10k; base 33.3%; rules-only 58.3%.
 
 ## Preserved uncommitted work
 
