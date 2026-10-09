@@ -21,3 +21,14 @@ def test_real_model_separates_obvious_cases():
     assert p2["block"] > p["block"] and p["allow"] > p2["allow"], (p, p2)
     assert p2["block"] > p2["allow"], p2
     assert len(c.reason(ToolCall("Bash", {"command": "rm -rf ~"}), "block")) > 5
+
+@pytest.mark.slow
+def test_prefix_cache_matches_full_pass():
+    from bantay.classifier import Classifier
+    c = Classifier()
+    assert c._prefix_len > 0
+    for call in [ToolCall("Bash", {"command": "npm install lodash"}, cwd="/p", branch="main"),
+                 ToolCall("Write", {"file_path": "/p/a.py", "content": "print(1)"}, cwd="/p")]:
+        _, cached = c.classify(call)
+        full = c._full_probs(call)
+        assert all(abs(cached[l] - full[l]) < 0.05 for l in cached), (cached, full)

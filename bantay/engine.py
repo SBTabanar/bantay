@@ -3,12 +3,13 @@ import re, time
 from .types import ToolCall, Decision
 from . import rules
 
+# No find/fd (they can -delete/-exec); no newlines (a chained second command would skip the model).
 ALLOWLIST_RE = re.compile(
-    r"^\s*(?:ls|pwd|whoami|date|uname|which|type|wc|du|df|tree|file|stat|head|tail|cat|less|grep|rg|find|fd|diff"
+    r"^\s*(?:ls|pwd|whoami|date|uname|which|type|wc|du|df|tree|file|stat|head|tail|cat|less|grep|rg|diff"
     r"|git\s+(?:status|diff|log|branch|show|remote|fetch|stash\s+list|rev-parse|blame)"
     r"|npm\s+(?:test|run\s+(?:test|lint|build|typecheck|dev)|ls|-v|--version)|pnpm\s+(?:test|lint|build)|yarn\s+(?:test|lint|build)"
     r"|pytest|python3?\s+-m\s+pytest|ruff|eslint|prettier|tsc|cargo\s+(?:test|build|check|clippy)|go\s+(?:test|build|vet)|make\s+(?:test|lint|build)"
-    r"|node\s+-v|python3?\s+--version|echo\s+[^$`]*)\b[^|;&>`$]*$"
+    r"|node\s+-v|python3?\s+--version|echo\s+[^$`\n\r]*)\b[^|;&>`$\n\r]*$"
 )
 
 class Engine:

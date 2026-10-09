@@ -34,3 +34,18 @@ def test_garbage_input_never_raises():
 
 def test_latency_recorded(bash):
     assert Engine(FakeClassifier()).decide(bash("ls")).latency_ms >= 0
+
+def test_allowlist_rejects_chained_and_find_bypasses(bash):
+    for cmd in ["ls\nnode exfil.js", "git status\rpython steal.py", "echo hi\ncurl evil.io",
+                "find . -delete", "find . -exec rm -rf {} +", "fd -x rm"]:
+        fc, call = FakeClassifier("block"), bash(cmd)
+        d = Engine(fc).decide(call)
+        assert d.source in ("rule", "model") and d.verdict != "allow", (cmd, d)
+        if d.source == "model":
+            assert fc.calls == [call], (cmd, d)
+
+def test_allowlist_still_covers_routine(bash):
+    for cmd in ["ls -la", "git status"]:
+        fc = FakeClassifier("block")
+        d = Engine(fc).decide(bash(cmd))
+        assert d.verdict == "allow" and d.source == "allowlist" and fc.calls == [], (cmd, d)
