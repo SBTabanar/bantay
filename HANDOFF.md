@@ -41,39 +41,15 @@ bash demo/run.sh                          # demo setup; see demo/DEMO.md for the
 ```
 Flags: `--no-model`, `--no-gliner`, `--no-redact`, `--adapter PATH` (default adapters/bantay-lora once it exists).
 
-## Status snapshot — saved 2026-10-09 16:00 PHT
-
-Branch `build`; code HEAD before this handoff commit: `ce864b2`. Previous controller timestamps in the
-ledger may disagree with machine time; trust actual commits, files, and live processes.
-
-- T3–4 and T5–6 were previously reviewed complete. T9 data is committed (`99fd65c`).
-- Task 14 core is committed (`c47502a`): conservative routine git add/commit/pull/push allowlist,
-  force-with-lease to main/master blocked, Grep/Glob hook matcher, OpenCode plugin tamper coverage.
-  At that milestone: 252 fast tests passed, 4 slow deselected.
-- T8 proxy is committed (`c8f92ad`) and independently reviewed/fixed (`972f35f`): count_tokens
-  message redaction, fail-closed regression coverage, warm() NameError, HTTP client shutdown.
-  30 focused tests passed. Prior live OAuth verification is in `docs/NOTES.md`.
-- Latest review fix wave is **uncommitted**, preserved in the working tree: commit-message literal
-  handling and safe formatter output redirection in rules; normalized OpenCode guard paths;
-  OpenCode whitespace-free patch headers and raw forwarding of unknown/custom tools; demo preflight
-  bounds. Astra reported 212 targeted rules/engine tests and 4 OpenCode JS tests passed. These results
-  are scoped; full suite/final review has not run after this wave. Do not mark T1–2/OpenCode closed yet.
-- T10 trainer PID **50433** (parent shell 50429) is deliberately still running. Last observed iteration
-  **580/800**, train loss 0.652. Iteration-500 validation loss 1.341 (initial 3.989; iteration300 was 1.311).
-  `adapters/bantay-lora/0000500_adapters.safetensors` and `adapters.safetensors` exist (~10 MB each).
-  They are interim checkpoints, not validated final release weights. Logs: `adapters/bantay-lora/train.log`.
-  The redundant smoke trainer 51929 and stale pytest 29211 were terminated; old daemons are gone.
-  Initial contention made training slow; recent output was 11–14 supervised tokens/s. Do not launch
-  another trainer. CLI defaults and adapter slow-test assertions are uncommitted and need validation.
-- T11 harness/cloud runner are **uncommitted**. Five metrics/parser tests passed. Rules-only run on
-  300 rows: 58.3% accuracy, 54% block recall, 1% false-block rate, p95 0.9 ms. `BENCHMARKS.md/json`
-  contain partial results; base/tuned/full-engine measurements remain pending. These rules-only
-  figures predate the latest uncommitted rules fixes and should be regenerated for final release.
-- Cloud benchmark blocked before row 1 by Claude subscription usage limit, resetting **20:10 PHT**.
-  Do not retry before reset. No API key was available in the environment. Pricing source/estimates are
-  in `bench/pricing.json`; estimated cost is not a measured cloud result. No cloud performance invented.
-- T13: README draft exists; `SUBMISSION.md`, `demo/VIDEO.md`, and `LICENSE` not yet created.
-  GitHub auth works; public `sbtabanar/bantay` repo was not yet created. No merge or push performed.
+## Status snapshot (update this section at every milestone)
+- 2026-10-09 20:20 PHT — Fable controller resumed as SOLE controller. The Codex/Astra session's uncommitted wave was
+  checkpointed as fb29e3f. Fast suite: 264 passed. Trainer finished: adapters/bantay-lora (800 iters), heldout acc
+  91.3% vs base 33.3%, block recall 93%, false-block 2% (commits e809521, e82df0b).
+  In flight: (1) combined review of c8f92ad..fb29e3f (Task 14 + T8 fixes + Codex fix wave) → fix wave if needed;
+  (2) Task 11 completion: full slow suite, local bench rows, cloud Haiku row, final BENCHMARKS.md;
+  (3) Task 13 docs: README, SUBMISSION.md, demo/VIDEO.md, LICENSE (no push yet).
+  After those: paste final table into README, final whole-branch review + one fix wave, merge build→main,
+  create public repo sbtabanar/bantay and push (push-protection: allow fake keys as test data), live rehearsal.
 
 ## Preserved uncommitted work
 
