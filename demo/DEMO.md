@@ -39,7 +39,7 @@ Then:
 demo/run.sh --reset --restart   # sample repo back to HEAD, fresh bantayd (zeroed counters), model warmed, dashboard opens
 ```
 
-- The **first row in the dashboard feed is the warm-up** (`$ touch .bantay-warmup`, judged only, never run).
+- The **first row in the dashboard feed is the warm-up** (`$ ls`, judged only, never run).
   Say nothing about it, or call it "the warm-up call". Counters start at 1 decision.
 - The **"Last redaction" panel starts with the redactor warm-up** (`warm-up <PERSON_…> <PHONE_…> <EMAIL_…>`), and the
   redacted counter starts at about 3. Same treatment: "the warm-up call".
@@ -47,7 +47,7 @@ demo/run.sh --reset --restart   # sample repo back to HEAD, fresh bantayd (zeroe
   lands a teammate's hotfix on origin. Our clone is one commit behind, so a plain `git push` is **rejected**
   (non-fast-forward). That rejection is what tempts an agent toward `--force`.
 - Models load from the local Hugging Face cache with `HF_HUB_OFFLINE=1`; the WiFi beat needs nothing else.
-- Speeds to quote: **verdict 100–650 ms for model-decided calls; rule decisions under 1 ms.** Daemon RAM: about 1.4 GB with the model, more with GLiNER.
+- Speeds to quote: **model verdict 99 ms p50 / 563 ms p95; model ask/block with reason 542 ms p50 / 1080 ms p95. Rule-layer p95 is under 3 ms.** Daemon RAM: about 1.4 GB with the model, more with GLiNER.
 - Second terminal, from the repo root:
   ```bash
   cd demo/sample-project && ANTHROPIC_BASE_URL=http://127.0.0.1:4477/anthropic claude --dangerously-skip-permissions
@@ -55,7 +55,7 @@ demo/run.sh --reset --restart   # sample repo back to HEAD, fresh bantayd (zeroe
   If the proxy is not built, launch without `ANTHROPIC_BASE_URL=...` (the hook still judges every tool call).
 
 **Bypass mode on purpose:** Bantay's deny is enforced even when every built-in permission is off.
-Hook `ask` in bypass mode is unverified. If no prompt appears, go straight to the `bantay check` fallback.
+Headless `-p` bypass mode refuses hook `ask` without a prompt; interactive bypass-mode prompting is unverified. If no prompt appears, go straight to the `bantay check` fallback.
 
 **At every ask prompt, answer "No".** The point is that the human got asked; nothing should actually be deleted
 or pushed on stage. (If something does get deleted, `demo/run.sh --reset` puts it back after the talk.)
@@ -78,7 +78,7 @@ Expect on the dashboard:
 | Agent action | Verdict | Source / rule | Presenter |
 |---|---|---|---|
 | `ls`, `git status`, `git log`, `npm test` | allow | allowlist | — |
-| `rm -rf old` (or `git rm -r old`) | **ask** | `rm_in_project` | answer **No** |
+| `rm -rf old` | **ask** | `rm_in_project` | answer **No** |
 | `git add app.js README.md`, `git commit -m ...` | allow (allowlist for plain -m; model for heredoc commits) | allowlist / model | — |
 | `git push origin main` (rejected by origin: behind by one) | allow | allowlist | — |
 | `git pull --rebase origin main` | allow | allowlist | — |

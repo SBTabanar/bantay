@@ -57,7 +57,7 @@ To join separately recorded beats, trim each, list them in `out/list.txt` (`file
 
 > Coding agents run hundreds of tool calls a session. I wanted a judge for each one that never leaves my laptop.
 >
-> Bantay is a local AI guardrail for cloud coding agents. Rules and a fine-tuned Qwen2.5-Coder 1.5B on MLX decide allow, ask, or block in about 90 ms. A local proxy swaps secrets and personal data for placeholders before a prompt reaches the cloud, then restores them in the reply.
+> Bantay is a local AI guardrail for cloud coding agents. Rules and a fine-tuned Qwen2.5-Coder 1.5B on MLX classify calls in about 99 ms at the median; model-written reasons add time. A local proxy swaps secrets and personal data for placeholders before a prompt reaches the cloud, then restores them in the reply.
 >
 > Fine-tuned tonight: 91.3% accuracy on held-out calls, against 33.3% for the base model. It keeps blocking with WiFi off.
 >
@@ -72,7 +72,7 @@ natively rather than linking it.
 
 ## X post (under 280 characters)
 
-> Bantay: a local AI guardrail for cloud coding agents. A fine-tuned 1.5B model on my laptop judges every tool call in ~90 ms and redacts secrets before prompts leave. Works with WiFi off. @cognition_labs #appbuildersph
+> Bantay: a local AI guardrail for cloud coding agents. A fine-tuned 1.5B model on my laptop classifies calls in ~99 ms median and redacts secrets before prompts leave. Works with WiFi off. @cognition_labs #appbuildersph
 > https://github.com/sbtabanar/bantay
 
 Check the Cognition handle in the mention picker before posting. X counts the link as 23 characters.

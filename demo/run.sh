@@ -103,6 +103,8 @@ fi
 if command -v open >/dev/null; then open "$URL"; else echo "open $URL in a browser"; fi
 
 # --- 3. sample repo with its own history and a local "origin" ---
+# Resolve the hook to this checkout's venv, so a fresh clone works on another machine too.
+"$BANTAY" install --project "$SAMPLE"
 # A teammate's hotfix lands on origin after our clone, so a plain `git push` is rejected
 # (non-fast-forward). That is the moment an agent is tempted to reach for --force.
 make_remote() {

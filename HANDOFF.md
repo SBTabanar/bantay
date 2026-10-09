@@ -1,114 +1,56 @@
-# HANDOFF — Bantay (AppBuilders PH hackathon, deadline 2026-10-10 10:00 PHT)
+# HANDOFF — Bantay
 
-Read this first if you are a new AI session (Claude, Codex, anything) continuing this work.
+AppBuilders PH deadline: **2026-10-10 10:00 PHT**. Owner: Sergei Benjamin Tabanar (solo, Endevo).
 
-**Usage checkpoint: Codex / GPT-6 Astra high has saved state for the next session.**
-Sergei requested a handoff update because usage is nearly exhausted. The Astra executor was interrupted;
-no agent work should be assumed active. The existing LoRA training process is deliberately still running.
-The next controller should take ownership here, inspect processes/files first, and avoid duplicate training
-or overlapping work from an older Claude session.
+## Current checkpoint
 
-## What this is
-Bantay = local AI guardrail for cloud coding agents. A Python daemon on 127.0.0.1:4477 judges every tool call
-(allow / ask / block) with deterministic rules + a fine-tuned local Qwen2.5-Coder-1.5B (MLX, one forward pass,
-~90 ms), redacts PII/secrets from prompts leaving the laptop (GLiNER + regex, placeholder restore), and shows a
-live dashboard. Claude Code is guarded via a PreToolUse hook and `ANTHROPIC_BASE_URL` pointing at the daemon's
-`/anthropic` proxy. OpenCode is guarded via a plugin. Solo project by Sergei Benjamin Tabanar.
+Codex resumed Claude's checkpoint at Sergei's request on 2026-10-09. Work is sequential; no subagents or older Claude workers remain active. LoRA training is complete. Final rules fixes are committed at `3b7b56a`; benchmark/documentation and release preparation follow. No duplicate training is needed.
 
-## Authoritative documents (read in this order)
-1. `docs/superpowers/specs/2026-10-09-bantay-design.md` — the spec (binding).
-2. `docs/superpowers/plans/2026-10-09-bantay.md` — 13-task implementation plan with code per task.
-3. `.superpowers/sdd/2026-10-09-bantay/progress.md` — the execution ledger: every task's state, every review
-   finding, every controller ruling (`Ruling:` lines). Trust it over memory. Task briefs/reports live beside it.
-4. `docs/NOTES.md` — training/eval numbers and live-verification notes (created by Task 10).
+## Completed
 
-## Process being followed
-Superpowers "subagent-driven development": one implementer agent per task (batched 1+2, 3+4, 5+6, 7+8), a
-reviewer per batch, fix rounds (max 5) with scoped re-reviews, then a whole-branch final review. The original agents ran
-on Opus and the original planner was Fable 5.1. Sergei resumed work with GPT-6 Astra (high reasoning)
-on 2026-10-09; this preference supersedes the earlier Opus instruction. Continue sequentially; no further
-delegation unless explicitly requested. Implementers stage files by path only (never `git add -A`),
-plain commit messages, no AI attribution trailers. Work is on branch `build`; merge to `main` at the end.
+- All implementation tasks, including Claude Code hook/proxy and OpenCode plugin.
+- Final rule review: conservative heredoc tails, power-command arguments vs executables, ordinary `/etc` configuration asks, destructive/auth-file changes block.
+- Full-branch review of rules, classifier, engine, hooks, daemon, proxy, redaction, adapters, dashboard and demo.
+- Dashboard uses local fonts only, hides original redaction text by default; demo seeds an allow with `ls`. Demo launcher installs the hook for the current checkout.
+- Final benchmark at `3b7b56a`, all four local rows measured sequentially; reused existing 100-row cloud results.
 
-## How to run
-```
-uv venv -p 3.12 .venv && uv pip install -p .venv/bin/python -e ".[dev,pii]"
-.venv/bin/pytest -q                       # full suite (slow tests load the model, ~1 min)
-.venv/bin/bantay serve                    # daemon + dashboard http://127.0.0.1:4477
-.venv/bin/bantay check "rm -rf ~"         # one-off decision
-.venv/bin/bantay install --project DIR    # Claude Code hook into DIR/.claude/settings.json
-bash demo/run.sh                          # demo setup; see demo/DEMO.md for the 5-minute script
-```
-Flags: `--no-model`, `--no-gliner`, `--no-redact`, `--adapter PATH` (default adapters/bantay-lora once it exists).
+| System | Accuracy | Block recall | False-block | p50 / p95 ms |
+|---|---:|---:|---:|---:|
+| Rules | 61.3% | 62% | 1% | 0.2 / 0.6 |
+| Base | 33.3% | 100% | 100% | 91.6 / 214 |
+| LoRA | 91.3% | 93% | 2% | 98.8 / 563 |
+| Full engine | 90.0% | 95% | 2% | 133 / 785 |
 
-## Status snapshot (update this section at every milestone)
-- 2026-10-09 ~21:50 PHT — Fable controller, sole. Branch `build` HEAD 78d842b. Fast suite 495, node 8.
-  DONE: all plan tasks; wave fix rounds 1-4 clean (38f6bef); rule tune-up (78d842b) under review; README has the
-  benchmark table (eef74b3); override analysis in bench/override_analysis.md.
-  IN FLIGHT: tune-up review; live rehearsal agent (daemon running on :4477 with adapter; answers "does hook ask
-  work under --dangerously-skip-permissions"; report → .superpowers/sdd/2026-10-09-bantay/rehearsal-report.md).
-  NEXT: quiet final `bantay bench --adapter adapters/bantay-lora` (reuse bench/cloud_results.json) → regenerate the
-  README table region → final whole-branch review (one fix wave) → merge build→main → `gh repo create
-  sbtabanar/bantay --public --source . --push` (allow fake keys on push-protection) → fill SUBMISSION.md links →
-  Sergei: rehearse DEMO.md, record VIDEO.md, post. Pending Sergei: "by endevo" mark on the video end card (yes/no).
+Model ask/block including reason: 542 ms p50 / 1080 ms p95. Full engine RSS: 1412 MB, before GLiNER. The original 150 ms p95 target is not met. Held-out examples are excluded from LoRA training, but subsequent rules fixes used their errors: development evaluation, not an untouched security assessment.
 
-## Preserved uncommitted work
+Verification: **589 Python tests and 8 OpenCode tests pass**; shell syntax and whitespace checks pass.
 
-Tracked edits: `adapters/opencode/README.md`, `adapters/opencode/bantay.js`, `bantay/cli.py`,
-`bantay/rules.py`, `demo/DEMO.md`, `demo/run.sh`, `tests/test_classifier.py`, `tests/test_cli.py`,
-`tests/test_rules.py`. Inspect `git diff` before changing or committing them.
+## Release status
 
-Untracked: `BENCHMARKS.json`, `BENCHMARKS.md`, `README.md`, `adapters/bantay-lora/`,
-`bantay/bench.py`, `bench/`, `scripts/bench_cloud.py`, `scripts/eval_quick.py`, `scripts/train.sh`,
-`tests/test_bench_metrics.py`, `tests/test_opencode.mjs`. Do not delete these as scratch files.
-The ledger under `.superpowers/` is ignored by git but is maintained locally.
+Final checks and public GitHub release are being completed. Intended repo: https://github.com/sbtabanar/bantay. GitHub authentication works; repo did not exist at resume. Merge `build` to `main`, create public repo and push after checks. No video, social post, or submission form has been published.
 
-## Resume commands
+## Remaining presenter work
+
+1. Rehearse `demo/DEMO.md`; accept folder trust ahead of stage. Headless bypass mode refuses hook ask without a prompt; interactive bypass-mode prompting is still unverified. Use the documented CLI fallback if needed.
+2. Record the 60-second reel using `demo/VIDEO.md`. Optional “by endevo” end card is undecided; do not add without direction.
+3. Publish video and an X/LinkedIn post tagging Cognition and #appbuildersph.
+4. Fill `VIDEO_LINK_PENDING` and `POST_LINK_PENDING` in `SUBMISSION.md`, then submit before the deadline.
+
+## Run
 
 ```bash
-# Inspect saved work and live training before starting anything.
-git status --short
-git log -8 --oneline
-ps -p 50433 -o pid,etime,%cpu,command
-tail -12 adapters/bantay-lora/train.log
-# CPU-only verification/review can proceed while training runs.
-.venv/bin/pytest -q -m 'not slow'
-node --test tests/test_opencode.mjs
-# After the existing trainer completes, validate the adapter and run GPU work sequentially.
 .venv/bin/pytest -q
-.venv/bin/python scripts/eval_quick.py
-.venv/bin/python scripts/eval_quick.py adapters/bantay-lora
-.venv/bin/bantay bench --adapter adapters/bantay-lora
-# Only after the 20:10 PHT subscription reset:
-.venv/bin/python scripts/bench_cloud.py --limit 100
-.venv/bin/bantay bench --adapter adapters/bantay-lora
+node --test tests/test_opencode.mjs
+.venv/bin/bantay serve
+bash demo/run.sh
 ```
 
-## Remaining work, in order
+MLX needs Apple Silicon and Metal access; sandboxed tests may fail on import. Models are cached locally. `--no-gliner` gives regex-only redaction; `--no-model` asks on unmatched calls. The adapter defaults to `adapters/bantay-lora`.
 
-1. Review the uncommitted rules/OpenCode/demo fix wave, run CPU tests, path-stage and commit it.
-   Reconcile late reports in the ledger directory; T3–4 is already complete, T14 core and T8 fixes
-   already landed. Avoid reimplementing those. Final branch review remains required.
-2. Let existing T10 training finish; evaluate base vs tuned and run the restored adapter slow tests.
-   Record actual results in NOTES. Review and commit training scripts, default adapter wiring, tests,
-   config and chosen weights. If quality is poor, investigate data/training before claiming success.
-3. Review/finish T11 harness and run local benchmark rows after training; rerun rules-only for current
-   code. Run cloud after usage reset, or explicitly retain unavailable status. Commit reproducible results.
-4. Finish T13 README with actual metrics, SUBMISSION.md (spec §6 disclosure), demo/VIDEO.md shot list
-   and social-post draft, MIT LICENSE. User requested function first; no dashboard design polish.
-5. Final whole-branch review and fix wave, full tests, create public `sbtabanar/bantay`, merge build→main
-   and push per original plan. If fake test secrets trip protection, reshape fixtures rather than
-   misrepresenting real secrets. Public release has not happened yet.
-6. Sergei: live rehearsal, record the 60-second reel, publish LinkedIn/X post tagging Cognition and
-   #appbuildersph, fill submission form. Video/post links remain pending; do not claim submitted.
+## Sources of truth
 
-## Submission checklist (hard requirements)
-Project name, short description, team members, PUBLIC GitHub repo, 1-minute demo video, X or LinkedIn post
-(tag Cognition, #appbuildersph), disclosure paragraph (what runs locally, what needs internet, models used).
-Form closes 10:00 2026-10-10, no extensions.
+- `docs/superpowers/specs/2026-10-09-bantay-design.md` and the matching plan.
+- `.superpowers/sdd/2026-10-09-bantay/progress.md` (local execution ledger).
+- `docs/NOTES.md`, `BENCHMARKS.json`, `BENCHMARKS.md`, `bench/override_analysis.md`.
 
-## Known limits to state honestly (README "Limitations")
-Apple Silicon only tonight (MLX); the allowlist is a latency shortcut for routine dev commands and not a sandbox
-(rules run first on every command; repo-local git config like core.fsmonitor can still run code on `git status`);
-model-decided ask/block adds ~0.3 s for the generated reason; the base model without the adapter blocks
-almost everything.
+The interrupted benchmark was preserved at `/private/tmp/bantay-interrupted-benchmark.json` before replacement. Training log remains locally at `adapters/bantay-lora/train.log` and is ignored. Do not commit logs, raw training scratch, or local Claude settings. Commit by explicit paths; plain messages with no AI trailers.

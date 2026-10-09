@@ -228,6 +228,7 @@ def render_report(results, metadata, cloud=None, labels=None, overrides=None):
               + f"{results.get('rules', {}).get('coverage', 0):.1%}.",
               '- Precision, recall, F1, confusion matrices and per-row predictions are in BENCHMARKS.json.',
               '- The held-out set is synthetic and has correlated examples from the same generation categories. These results do not establish security guarantees.',
+              '- LoRA training excludes this set, but rule fixes were informed by its errors. Final engine results are a development evaluation, not an untouched independent test.',
               '- Local inference has $0 API cost; hardware and electricity are excluded.']
     if re_meas and re_meas.get('note'):
         lines.append(f"- {re_meas['note']}")

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/sergei/code/ABPH/.venv/bin/bantay-hook",
+            "command": "bantay-hook",
             "timeout": 20
           }
         ]

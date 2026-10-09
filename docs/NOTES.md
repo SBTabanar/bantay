@@ -98,3 +98,11 @@ Findings worth a follow-up (not patched here; rules/engine are owned elsewhere):
   length does not explain them alone (a 49-character command took 2.6 s); a separate in-process pass gave
   p95 945 ms.
   Background load (mediaanalysisd, Spotlight) was present and is a candidate; not investigated further.
+
+## Final release verification (2026-10-09, 3b7b56a)
+
+All four local rows were regenerated sequentially with no other model jobs running; the existing 100-row cloud measurement was reused. Rules accuracy 61.3%, base 33.3%, LoRA 91.3%, full engine 90.0%. Full-engine block recall 95%, false-block rate 2%. LoRA verdict p50/p95 98.8/563 ms; full engine 133/785 ms; model ask/block including reason 542/1080 ms. The <150 ms p95 aspiration is not met.
+
+All nine rule/allowlist bugs above are now fixed. Final override analysis replaces the earlier report: 19 disagreements, 11 LoRA wins, 7 engine wins, 1 both wrong. The threshold change removes one unnecessary ask. Because rules were repaired using held-out errors, the final result is a development evaluation, not an independent security assessment.
+
+Final full test suite: 589 passed (including real models and GLiNER). Focused rules/engine/server verification: 532 passed. OpenCode: 8 passed. Shell syntax and git whitespace checks pass. Interactive ask in bypass mode is still unverified; headless ask is refused, as recorded in the rehearsal.
