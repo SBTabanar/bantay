@@ -165,8 +165,21 @@ def _label_counts(labels):
     return counts
 
 
-def render_report(results, metadata, cloud=None, labels=None):
-    lines = ['# Bantay benchmarks', '', f"Measured: {metadata['measured_at']} (git `{metadata['git_commit'][:7]}`).", '',
+def _overrides_current(overrides, labels, results):
+    """True when a saved override analysis still describes these predictions (same winning rows)."""
+    if not (overrides and labels and 'full' in results and 'tuned' in results):
+        return False
+    pairs = list(zip(labels, results['tuned']['predictions'], results['full']['predictions']))
+    return (sorted(overrides.get('lora_wins', [])) == [i for i, (y, t, f) in enumerate(pairs) if t == y != f]
+            and sorted(overrides.get('engine_wins', [])) == [i for i, (y, t, f) in enumerate(pairs) if f == y != t])
+
+
+def render_report(results, metadata, cloud=None, labels=None, overrides=None):
+    re_meas = metadata.get('remeasured')
+    lines = ['# Bantay benchmarks', '', f"Measured: {metadata['measured_at']} (git `{metadata['git_commit'][:7]}`)."
+             + (f" {', '.join(NAMES[m] for m in re_meas['modes'])} re-measured {re_meas['measured_at']} "
+                f"(git `{re_meas['git_commit'][:7]}`){': ' + re_meas['reason'] if re_meas.get('reason') else ''}."
+                if re_meas else ''), '',
              f"Machine: {metadata['machine']}. Dataset: `data/heldout.jsonl`, {metadata['n']} held-out examples "
              '(100 allow / 100 ask / 100 block).',
              f"Dataset SHA-256: `{metadata['dataset_sha256']}`. Local model: `{metadata['model']}`"
@@ -198,7 +211,8 @@ def render_report(results, metadata, cloud=None, labels=None):
                   'override the model, trading some accuracy for verdicts that cannot be talked out of a block. Of the rows LoRA '
                   f"gets right and the engine misses, {sum(y == 'allow' and f == 'ask' and t == y for y, t, f in pairs)} are a "
                   'conservative ask on a row labelled allow (e.g. `rm -rf` of build output), and '
-                  f"{sum(y == 'block' and f == 'allow' and t == y for y, t, f in pairs)} allowed a row labelled block (details in docs/NOTES.md)."]
+                  f"{sum(y == 'block' and f == 'allow' and t == y for y, t, f in pairs)} allowed a row labelled block (row-by-row in "
+                  'bench/override_analysis.md).']
     if cloud and cloud.get('matching_local_subset'):
         lines += ['', f"Same first {cloud['n']} rows, local systems (accuracy / block recall / false-block rate):", '']
         for k, m in cloud['matching_local_subset'].items():
@@ -215,6 +229,20 @@ def render_report(results, metadata, cloud=None, labels=None):
               '- Precision, recall, F1, confusion matrices and per-row predictions are in BENCHMARKS.json.',
               '- The held-out set is synthetic and has correlated examples from the same generation categories. These results do not establish security guarantees.',
               '- Local inference has $0 API cost; hardware and electricity are excluded.']
+    if re_meas and re_meas.get('note'):
+        lines.append(f"- {re_meas['note']}")
+    if _overrides_current(overrides, labels, results):
+        c = overrides['classes']
+        n_lose, n_win = len(overrides['lora_wins']), len(overrides['engine_wins'])
+        fixed = results['full']['accuracy'] + len(c.get('ii', [])) / results['full']['n']
+        lines.append(
+            f"- Why the full engine scores below the model alone: rules and the allowlist decide before the model, and where the "
+            f"two disagree the engine is wrong on {n_lose} rows LoRA alone got right and right on {n_win} rows LoRA got wrong. "
+            f"Of the {n_lose} losses, {len(c.get('ii', []))} are rule or allowlist bugs (a stronger rule failed to match, or a "
+            f"pattern over-matched), {len(c.get('iii', []))} are deliberate policy (ask before any recursive delete, even of "
+            f"build output; a low-confidence allow becomes ask), and {len(c.get('i', []))} are debatable labels where the rule "
+            "follows policy. The engine's wins include two production database drops the model only asked about. Fixing the "
+            f"bugs alone would put the engine at {fixed:.1%}. Row-by-row: {overrides['doc']}.")
     if cloud:
         lines += ['- Cloud latency is wall time per sequential `claude -p` call: CLI process startup, provider network time and generation. '
                   f"It uses the first {cloud['n']} held-out rows"
@@ -290,7 +318,9 @@ def write_report(out, metadata, results, heldout='data/heldout.jsonl'):
     labels = None
     if data.exists() and hashlib.sha256(data.read_bytes()).hexdigest() == metadata['dataset_sha256']:
         labels = [json.loads(line)['label'] for line in data.read_text().splitlines() if line.strip()]
-    report = render_report(results, metadata, load_cloud(metadata), labels)
+    summary = Path('bench/override_summary.json')
+    overrides = json.loads(summary.read_text()) if summary.exists() else None
+    report = render_report(results, metadata, load_cloud(metadata), labels, overrides)
     out.write_text(report)
     print(report)
 
@@ -304,9 +334,31 @@ def merge(out='BENCHMARKS.md'):
     write_report(out, saved['metadata'], saved['results'])
 
 
+def rerun(modes, out='BENCHMARKS.md', heldout='data/heldout.jsonl', reason=''):
+    """Re-measure only `modes` (e.g. tuned full) and merge them into BENCHMARKS.json; other rows and the
+    cloud row are kept as measured. Records which rows were re-measured, when, and at which commit."""
+    import datetime, json, subprocess, sys
+    from pathlib import Path
+    out = Path(out)
+    saved = json.loads(out.with_suffix('.json').read_text())
+    meta = saved['metadata']
+    for mode in modes:
+        print(f'Re-measuring {mode}...', flush=True)
+        proc = subprocess.run([sys.executable, '-m', 'bantay.bench', mode, str(Path(heldout).resolve()), meta['model'],
+                               meta.get('adapter') or ''], capture_output=True, text=True, check=True)
+        saved['results'][mode] = json.loads(proc.stdout.split('BANTAY_RESULT=')[-1])
+    meta['remeasured'] = dict(modes=list(modes), measured_at=datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
+                              git_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                              reason=reason)
+    out.with_suffix('.json').write_text(json.dumps(saved, indent=2) + '\n')
+    write_report(out, meta, saved['results'], heldout)
+
+
 if __name__ == '__main__':
     import json, sys
     if sys.argv[1:2] == ['merge']:  # python -m bantay.bench merge [BENCHMARKS.md]
         merge(*sys.argv[2:3])
+    elif sys.argv[1:2] == ['rerun']:  # python -m bantay.bench rerun tuned full
+        rerun(sys.argv[2:])
     else:
         print('BANTAY_RESULT=' + json.dumps(worker(*sys.argv[1:])))

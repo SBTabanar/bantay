@@ -6,7 +6,17 @@
     "dataset_sha256": "1689daa25bd96ea17f6447af1f287804436f7174e0da33801dbe9c2084c7f8d8",
     "model": "mlx-community/Qwen2.5-Coder-1.5B-Instruct-4bit",
     "adapter": "adapters/bantay-lora",
-    "git_commit": "ed042212687fdff872cf9a53baf144d3e9cabdd2"
+    "git_commit": "ed042212687fdff872cf9a53baf144d3e9cabdd2",
+    "remeasured": {
+      "modes": [
+        "tuned",
+        "full"
+      ],
+      "measured_at": "2026-10-09T20:36:48+08:00",
+      "git_commit": "6971323151430ceaa283919020de49eac557afeb",
+      "reason": "with no other model jobs on the machine (the first run overlapped other agents' model tests); predictions were identical row for row",
+      "note": "LoRA label-only p95 is noisy on this laptop even without other model jobs: 1108 ms in the first run, 1392 ms in the re-run, 945 ms in a separate in-process pass, while p50 was 97-110 ms in both benchmark runs. Slow rows skew longer but length does not explain them alone (a 49-character command took 2.6 s), and other model jobs do not explain the tail; it was not investigated further. Rules commits after the re-measure (fc764d8, de241bd) change three rows: `git add aws-credentials.csv` (row 10) now blocks as labelled, and two `git add` of OAuth private keys (rows 78, 184) are now blocked by a rule instead of the model. With those rules, rules-only would score 59.3% and the full engine 87.0%; the table keeps the measured values."
+    }
   },
   "results": {
     "rules": {
@@ -786,22 +796,22 @@
       "block_recall": 0.93,
       "false_block_rate": 0.02,
       "latency_ms": {
-        "p50": 110.11279201193247,
-        "p95": 1108.020709012635
+        "p50": 97.31604199623689,
+        "p95": 1391.657333006151
       },
       "latency_by_source_ms": {
         "model": {
           "n": 300,
-          "p50": 110.11279201193247,
-          "p95": 1108.020709012635
+          "p50": 97.31604199623689,
+          "p95": 1391.657333006151
         },
         "model_ask_block": {
           "n": 207,
-          "p50": 113.84487501345575,
-          "p95": 1189.9067079939414
+          "p50": 97.35362499486655,
+          "p95": 1391.657333006151
         }
       },
-      "decisions_per_second": 3.8736551356743525,
+      "decisions_per_second": 3.0600388079106704,
       "sources": {
         "model": 300
       },
@@ -1107,7 +1117,7 @@
         "block",
         "block"
       ],
-      "peak_rss_mb": 1407.008768
+      "peak_rss_mb": 1406.844928
     },
     "full": {
       "n": 300,
@@ -1152,32 +1162,32 @@
       "block_recall": 0.89,
       "false_block_rate": 0.02,
       "latency_ms": {
-        "p50": 185.99450000328943,
-        "p95": 1147.774875003961
+        "p50": 189.6433330111904,
+        "p95": 1110.345959008555
       },
       "latency_by_source_ms": {
         "model": {
           "n": 175,
-          "p50": 568.0735420028213,
-          "p95": 1233.479750007973
+          "p50": 618.7393750005867,
+          "p95": 1303.9360840048175
         },
         "rule": {
           "n": 111,
-          "p50": 0.3293329937150702,
-          "p95": 0.8343749941559508
+          "p50": 0.5013750051148236,
+          "p95": 1.305750003666617
         },
         "allowlist": {
           "n": 14,
-          "p50": 0.40049999370239675,
-          "p95": 0.5992919905111194
+          "p50": 0.6209999992279336,
+          "p95": 0.9757499938132241
         },
         "model_ask_block": {
           "n": 106,
-          "p50": 698.9612500037765,
-          "p95": 1290.4220829950646
+          "p50": 722.2732090012869,
+          "p95": 1425.2625000081025
         }
       },
-      "decisions_per_second": 3.076209023023806,
+      "decisions_per_second": 2.897789108778307,
       "sources": {
         "model": 175,
         "rule": 111,
@@ -1485,7 +1495,7 @@
         "block",
         "block"
       ],
-      "peak_rss_mb": 1407.418368
+      "peak_rss_mb": 1406.713856
     }
   }
 }

@@ -9,7 +9,7 @@ Bantay answers each proposed tool call with **allow**, **ask**, or **block**. De
 ## Why local
 
 1. **The judge must not be the defendant.** If the safety check is another cloud API call, the agent's provider grades its own homework, and the check disappears when the network or the API does.
-2. **Every tool call, every time.** A busy agent session issues hundreds of tool calls. A cloud round trip of 600–1500 ms per call makes the agent unusable. A local verdict takes about 90 ms; a rule block takes about 1 ms.
+2. **Every tool call, every time.** A busy agent session issues hundreds of tool calls. A measured cloud judgment took 2.7 s per call through the Claude Code CLI, 1.0 s of it API time alone; over hundreds of calls that adds up to minutes of waiting. A local verdict takes about 100 ms; a rule block takes about 1 ms.
 3. **It must see the secrets to protect them.** To block a `.env` leak or redact an API key from an outbound prompt, the checker reads the raw secret. That data cannot be sent anywhere by definition.
 4. **Offline and free.** It works on a plane or during a brownout, and costs nothing per decision. Ten thousand decisions through a cloud classifier is real money; through Bantay it is electricity.
 
@@ -23,7 +23,7 @@ Bantay answers each proposed tool call with **allow**, **ask**, or **block**. De
 │                                   │      1. rules (~1 ms, the floor)       │
 │                                   │      2. routine allowlist (npm test)   │
 │                                   │      3. Qwen2.5-Coder-1.5B + LoRA      │
-│                                   │         via MLX (~90 ms verdict)       │
+│                                   │         via MLX (~100 ms verdict)      │
 │                                   └──<── allow / ask / block + reason      │
 │                                                                            │
 │      what leaves the laptop for decisions: nothing                         │
@@ -135,21 +135,24 @@ Any agent with a pre-tool hook can use `POST /decide`. Claude Code and OpenCode 
 
 ## Models and tools
 
-Runs locally: all decision-making (deterministic rules, a routine allowlist, and Qwen2.5-Coder-1.5B-Instruct 4-bit with a Bantay LoRA adapter, via MLX), secret and personal-data redaction (GLiNER `gliner_multi_pii-v1` for names and addresses, plus regexes for API keys, emails, Philippine mobile numbers, TIN, SSS, PhilHealth, and card numbers), the daemon, the proxy, the dashboard, the Claude Code hook, and the OpenCode plugin. Requires internet: only the coding agent itself (Claude Code calling Anthropic's API) and the one-time model download. The model is about 0.9 GB on disk and the LoRA adapter about 10 MB; the daemon with the model uses under 2 GB of RAM. Cloud AI as a secondary component: Claude generated the 2,300-row synthetic training set (31 categories, 300 rows held out) and is the cloud comparison baseline in the benchmarks. On the held-out set the fine-tuned adapter reaches 91.3% accuracy against 33.3% for the base model, with 93% block recall and a 2% false-block rate. Frameworks: Python 3.12, mlx-lm, GLiNER, FastAPI/uvicorn, httpx, Claude Code hooks, and the OpenCode plugin API. Development was assisted by Claude and Codex.
+Runs locally: all decision-making (deterministic rules, a routine allowlist, and Qwen2.5-Coder-1.5B-Instruct 4-bit with a Bantay LoRA adapter, via MLX), secret and personal-data redaction (GLiNER `gliner_multi_pii-v1` for names and addresses, plus regexes for API keys, emails, Philippine mobile numbers, TIN, SSS, PhilHealth, and card numbers), the daemon, the proxy, the dashboard, the Claude Code hook, and the OpenCode plugin. Requires internet: only the coding agent itself (Claude Code calling Anthropic's API) and the one-time model download. The model is about 0.9 GB on disk and the LoRA adapter about 10 MB; the daemon with the model is about 1.4 GB resident (peak RSS 1,407 MB in the benchmark), and GLiNER adds roughly 1.9 GB more when name and address redaction is on (`--no-gliner` skips it). Cloud AI as a secondary component: Claude generated the 2,300-row synthetic training set (31 categories, 300 rows held out) and is the cloud comparison baseline in the benchmarks. On the held-out set the fine-tuned adapter reaches 91.3% accuracy against 33.3% for the base model, with 93% block recall and a 2% false-block rate. Frameworks: Python 3.12, mlx-lm, GLiNER, FastAPI/uvicorn, httpx, Claude Code hooks, and the OpenCode plugin API. Development was assisted by Claude and Codex.
 
 ## Benchmarks
 
 Held-out set: 300 synthetic tool calls (100 allow, 100 ask, 100 block), never seen in training. Apple M4, 16 GB.
 
 <!-- BENCHMARKS:START -->
-| System | Accuracy | Block recall | False blocks / true allow | p50 ms |
-|---|---:|---:|---:|---:|
-| Rules only | 58.3% | 54.0% | 1.0% | 0.4 |
-| Base Qwen2.5-Coder-1.5B 4-bit | 33.3% | 100% | 100% | 126 |
-| Qwen + Bantay LoRA | 91.3% | 93.0% | 2.0% | 88–95 |
-| Cloud (Claude) | pending | pending | pending | pending |
+| System | n | Accuracy | Block recall | False-block rate | p50 ms | p95 ms | Decisions/s | RAM (peak RSS MB) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Rules only | 300 | 58.3% | 54.0% | 1.0% | 0.1 | 0.3 | 8051.90 | 19 |
+| Base model (Qwen2.5-Coder-1.5B 4-bit) | 300 | 33.3% | 100.0% | 100.0% | 92.0 | 210 | 7.86 | 1377 |
+| Fine-tuned model (LoRA) | 300 | 91.3% | 93.0% | 2.0% | 97.3 | 1392 | 3.06 | 1407 |
+| Full engine (rules + allowlist + LoRA) | 300 | 86.7% | 89.0% | 2.0% | 190 | 1110 | 2.90 | 1407 |
+| Cloud: claude-haiku-5-5 via Claude Code CLI (incl. startup) | 100 | 84.0% | 75.9% | 0.0% | 2680 | 3831 | 0.34 | n/a (remote) |
 
-Model rows measure warm classification. A model-written reason for ask/block adds about 0.3 s. Full table, methodology, and raw metrics in [BENCHMARKS.md](BENCHMARKS.md) and [BENCHMARKS.json](BENCHMARKS.json).
+**Reading the table.** On the same first 100 rows and the same prompt, the fine-tuned local model is right 91.0% of the time (91.3% on all 300) against 84.0% for Claude Haiku 5.5 zero-shot, with 93.1% against 75.9% block recall. A local verdict takes about 100 ms at p50, against 2.7 s per decision through the Claude Code CLI, of which about 1.0 s is API time alone. Local decisions cost $0; the same calls through the API come to about $1.32 per 10,000 decisions at list price.
+
+The full engine scores below the model alone because rules and the allowlist overrule it; the [override analysis](bench/override_analysis.md) goes through each of the 29 disagreements. Model rows measure warm classification; when the model says ask or block, writing its one-line reason brings that decision to about 0.7 s at p50. Full table, methodology, and raw metrics in [BENCHMARKS.md](BENCHMARKS.md) and [BENCHMARKS.json](BENCHMARKS.json).
 <!-- BENCHMARKS:END -->
 
 The base model predicts block for 299 of 300 rows, which is why its block recall is perfect and it is unusable. The adapter fixes that: tuned confusion (rows true, columns allow/ask/block) is allow [91, 7, 2], ask [2, 90, 8], block [0, 7, 93]. Training details are in [docs/NOTES.md](docs/NOTES.md).
@@ -157,10 +160,11 @@ The base model predicts block for 299 of 300 rows, which is why its block recall
 Reproduce:
 
 ```bash
-bash scripts/train.sh                                   # ~80 min on an M4
+bash scripts/train.sh                                    # ~80 min on an M4
 .venv/bin/python scripts/eval_quick.py adapters/bantay-lora
-bantay bench
-.venv/bin/python scripts/bench_cloud.py                 # optional, needs Claude Code login
+bantay bench                                             # all local rows; reuses bench/cloud_results.json
+.venv/bin/python -m bantay.bench rerun tuned full        # re-measure only the model rows
+.venv/bin/python scripts/bench_cloud.py                  # optional, needs Claude Code login
 .venv/bin/pytest -q -m 'not slow'                        # fast checks
 .venv/bin/pytest -q                                      # includes model-dependent checks
 node --test tests/test_opencode.mjs                      # OpenCode adapter checks
@@ -170,6 +174,7 @@ node --test tests/test_opencode.mjs                      # OpenCode adapter chec
 
 - **Apple Silicon only tonight.** Inference uses MLX. Linux, Windows, and an Ollama backend are follow-up work.
 - **The allowlist is a latency shortcut, not a sandbox.** It lets routine development commands skip the model, and some of them run project code by design (`npm test`, `make`, `pytest`). Rules run first on every command. Repository-local git config such as `core.fsmonitor` can still run code on `git status`.
+- **Recursive deletes always ask.** Any `rm -r` inside the project, even of `node_modules` or `dist`, and any `git clean -f` returns **ask**, where the dataset labels routine cleanup allow. This is deliberate and accounts for 9 of the 21 held-out rows the full engine gets wrong and the model alone gets right; the [override analysis](bench/override_analysis.md) lists the rows.
 - **The model can be wrong.** Accuracy on the held-out set is 91.3%, and that set is synthetic. Classifier scores are relative label probabilities, not calibrated risk. A low-confidence allow becomes ask.
 - **Rules are the floor.** Secret-file reads, force-push to main, environment dumps, pipe-to-shell, and exfiltration uploads are caught by deterministic rules and never depend on the model. This is still a heuristic guardrail, not an operating-system sandbox: shell indirection and unrecognized tools can get past it. Do not give an agent access you cannot afford to lose.
 - **The first proxied request is slow.** Claude Code's first request carries a few hundred kilobytes of context. GLiNER scanning it took 9–26 s on CPU; later requests hit a per-block cache. `--no-gliner` makes redaction regex-only and near-instant.
