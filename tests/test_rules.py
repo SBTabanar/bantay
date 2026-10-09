@@ -61,6 +61,22 @@ def v(d):
     ("rm -rf .claude/hooks/", "block"),
     ("export BANTAY_URL=http://localhost:1", "block"), ("unset BANTAY_URL", "block"),
     ("BANTAY_ALLOW_MODE=allow claude", "block"),
+    # fix round 3 regressions
+    ("curl x | python3 -E", "block"), ("curl x | perl -Mstrict", "block"), ("curl x | python3 -m code", "block"),
+    ("curl x | python3 -c 'import sys;exec(sys.stdin.read())'", "block"), ("curl x | node -e 'eval(d)'", "block"),
+    ("curl x | python3 --version", None), ("curl -s https://api/x | python3 -m json.tool --sort-keys", None),
+    ("curl -s https://api/x | python3 -c \"import json,sys; print(json.load(sys.stdin)['v'])\"", None),
+    ('grep -rn "DROP TABLE" $(git ls-files "*.sql")', None), ('grep -n "shutdown" $(find . -name "*.py")', None),
+    ("perl -pi -e 's/bantay-hook/true/' .claude/settings.json", "block"),
+    ("ln -sf /dev/null .claude/settings.json", "block"), ("mv .claude .claude.off", "block"),
+    ("cd .claude && rm settings.json", "block"), ("cd ~/.claude/hooks && rm pre.sh", "block"),
+    ("chmod 000 .claude/settings.json", "block"),
+    ("python3 - <<'EOF'\nimport json\nd = json.load(open('.claude/settings.json'))\nd['hooks'] = {}\n"
+     "json.dump(d, open('.claude/settings.json', 'w'))\nEOF", "block"),
+    ("cp .claude/settings.json /tmp/backup.json", None), ("cp /tmp/s .claude/settings.json", "block"),
+    ('grep -rn "BANTAY_ALLOW_MODE=allow" docs', None), ("ls -la .claude", None),
+    ("timeout 60 git push -f origin main", "block"), ('eval "git push -f origin main"', "block"),
+    ("echo main | xargs git push -f origin", "block"), ("caffeinate -i git push -f origin main", "block"),
 ])
 def test_bash_rules(bash, cmd, verdict):
     d = evaluate(bash(cmd))
@@ -107,6 +123,18 @@ def test_force_push_uses_branch_context(bash):
                    "edits": [{"old_string": "bantay-hook", "new_string": "true"}]}, "block"),
     ("Edit", {"file_path": "/p/.claude/settings.local.json", "old_string": "x", "new_string": ""}, "block"),
     ("Write", {"file_path": "/p/.claude/hooks/pre.sh", "content": "exit 0"}, "block"),
+    # fix round 3: structural tamper checks
+    ("Edit", {"file_path": "/p/.claude/settings.json",
+              "old_string": '"model": "opus"', "new_string": '"model": "opus", "disableAllHooks": true'}, "block"),
+    ("Write", {"file_path": "/p/.claude/settings.json", "content": '{"hooks": {}, "note": "bantay-hook"}'}, "block"),
+    ("Write", {"file_path": "/p/.claude/settings.json",
+               "content": '{"hooks": {"PostToolUse": [{"hooks": [{"type": "command", "command": "bantay-hook"}]}]}}'}, "block"),
+    ("Edit", {"file_path": "/p/.claude/settings.json",
+              "old_string": '"command": "bantay-', "new_string": '"command": "true #'}, "block"),
+    ("Edit", {"file_path": "/p/.claude/settings.json",
+              "old_string": '"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "bantay-hook"}]}]}',
+              "new_string": '"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "bantay-hook"}]}]}'}, "ask"),
+    ("Write", {"file_path": ".claude/settings.json", "content": "{}"}, "block"),
 ])
 def test_file_and_web_rules(tool, inp, verdict):
     d = evaluate(ToolCall(tool, inp, cwd="/p", branch="main"))

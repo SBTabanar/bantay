@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, re, shlex
+import json, os, re, shlex
 from dataclasses import dataclass
 from typing import Callable
 from .types import ToolCall, Decision, Verdict
@@ -75,13 +75,18 @@ def _git_subcommand(words: list[str]) -> tuple[str, list[str]] | None:
         i += 2 if words[i] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace") else 1
     return (words[i], words[i + 1:]) if i < len(words) else None
 
-WRAPPERS = {"sudo", "env", "command", "exec", "nohup", "time", "nice"}
-WRAPPER_VALUE_FLAGS = {"-u", "-g", "-n"}
+# wrapper -> its options that take a value
+WRAPPERS: dict[str, set[str]] = {
+    "sudo": {"-u", "-g", "-C", "-h", "-p"}, "env": {"-u", "-C"}, "command": set(), "exec": {"-a"},
+    "nohup": set(), "time": set(), "nice": {"-n"}, "timeout": {"-s", "-k"}, "caffeinate": {"-t", "-w"},
+    "xargs": {"-n", "-I", "-P", "-L", "-d", "-E", "-s", "-a"},
+}
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 
 def _commands(cmd: str, depth: int = 0) -> list[list[str]]:
-    """Word lists of every simple command, with subshell parens, wrappers (env, command, exec,
-    nohup, time, nice, sudo, VAR=x) removed and `sh -c "..."` scripts expanded recursively."""
+    """Word lists of every simple command, with subshell parens and wrappers (see WRAPPERS, plus
+    VAR=x) removed, and `sh -c "..."` / `eval "..."` scripts expanded recursively. A command fed
+    by xargs is reported without the arguments xargs would append."""
     out = []
     for seg in _segments(cmd):
         try:
@@ -91,14 +96,21 @@ def _commands(cmd: str, depth: int = 0) -> list[list[str]]:
         words = [w.lstrip("(").rstrip(");") for w in words]
         words = [w for w in words if w]
         while words:
-            if words[0] in WRAPPERS:
+            name = os.path.basename(words[0])
+            if name in WRAPPERS:
                 words = words[1:]
-                while words and words[0].startswith("-"):
-                    words = words[2:] if words[0] in WRAPPER_VALUE_FLAGS else words[1:]
+                while words and words[0].startswith("-") and words[0] != "-":
+                    words = words[2:] if words[0] in WRAPPERS[name] else words[1:]
+                if name == "timeout" and words:
+                    words = words[1:]  # the duration
             elif re.match(r"^[A-Za-z_]\w*=", words[0]):
                 words = words[1:]
             else:
                 break
+        if words and words[0] == "eval":
+            if depth < 3:
+                out += _commands(" ".join(words[1:]), depth + 1)
+            continue
         if words and os.path.basename(words[0]) in SHELLS:
             i = next((i for i, w in enumerate(words[1:], 1)
                       if w.startswith("-") and not w.startswith("--") and "c" in w), None)
@@ -112,31 +124,43 @@ def _commands(cmd: str, depth: int = 0) -> list[list[str]]:
 GREP_CMDS = {"grep", "egrep", "fgrep", "rg", "ag", "ack"}
 GREP_VALUE_FLAGS = {"-A", "-B", "-C", "-m", "-g", "-t", "-T", "-f", "--file", "--glob", "--type", "--max-count", "--context"}
 
-def _drop_search_pattern(args: list[str]) -> list[str]:
-    """grep/rg args minus the search pattern (files and flags are kept)."""
-    out, i, dropped = [], 0, False
+def _split_search_pattern(args: list[str]) -> tuple[list[str], list[str]]:
+    """(grep/rg args minus the search pattern, the pattern words). Files and flags are kept."""
+    out, patterns, i = [], [], 0
     while i < len(args):
         a = args[i]
         if a in ("-e", "--regexp"):
-            dropped, i = True, i + 2
+            patterns.append(args[i + 1] if i + 1 < len(args) else "")
+            i += 2
             continue
         if a.startswith("--regexp=") or (a.startswith("-e") and len(a) > 2):
-            dropped, i = True, i + 1
+            patterns.append(a)
+            i += 1
             continue
         if a == "--":
             rest = args[i + 1:]
-            return out + (rest if dropped else rest[1:])
+            if not patterns and rest:
+                patterns.append(rest[0])
+                rest = rest[1:]
+            return out + rest, patterns
         if a.startswith("-"):
             out.append(a)
             if a in GREP_VALUE_FLAGS and i + 1 < len(args):
                 out.append(args[i + 1])
                 i += 1
-        elif not dropped:
-            dropped = True
+        elif not patterns:
+            patterns.append(a)
         else:
             out.append(a)
         i += 1
-    return out
+    return out, patterns
+
+def _strip_grep(head: list[str], args: list[str]) -> list[str] | None:
+    """grep words without the search pattern, or None when the pattern itself runs code."""
+    kept, patterns = _split_search_pattern(args)
+    if any(x in w for w in patterns for x in SUBSTITUTIONS):
+        return None
+    return head + kept
 
 def _redirections(args: list[str]) -> list[str]:
     """Only the output redirections (and their targets) of an echo/printf."""
@@ -157,8 +181,9 @@ SUBSTITUTIONS = ("$(", "`", "<(", ">(")
 
 def _literal_scan_text(cmd: str) -> str:
     """The command with grep/rg search patterns and echo/printf literals removed, so a string that
-    is only searched for or printed (e.g. `grep -rn "DROP TABLE"`) does not trip a rule. A segment
-    containing command or process substitution, or an echo piped onward, is left untouched."""
+    is only searched for or printed (e.g. `grep -rn "DROP TABLE"`) does not trip a rule. A grep whose
+    pattern holds a command/process substitution, and an echo containing one or piped onward, are
+    left untouched."""
     out, last = [], 0
     for a, b in _segment_spans(cmd):
         seg = cmd[a:b]
@@ -167,13 +192,12 @@ def _literal_scan_text(cmd: str) -> str:
             continue
         name = os.path.basename(words[0])
         new = None
-        if any(x in seg for x in SUBSTITUTIONS):
-            pass  # `$(...)`, backticks and process substitution run code: never strip them
-        elif name in GREP_CMDS:
-            new = [words[0]] + _drop_search_pattern(words[1:])
+        if name in GREP_CMDS:
+            new = _strip_grep(words[:1], words[1:])
         elif words[:2] == ["git", "grep"]:
-            new = words[:2] + _drop_search_pattern(words[2:])
-        elif name in ("echo", "printf") and not (cmd[b:b + 1] == "|" and cmd[b:b + 2] != "||"):
+            new = _strip_grep(words[:2], words[2:])
+        elif name in ("echo", "printf") and not any(x in seg for x in SUBSTITUTIONS) \
+                and not (cmd[b:b + 1] == "|" and cmd[b:b + 2] != "||"):
             new = [words[0]] + _redirections(words[1:])
         if new is not None:
             out += [cmd[last:a], " " + " ".join(new) + " "]
@@ -293,26 +317,94 @@ def _secret_file_git_add(call: ToolCall) -> bool:
 
 # --- guardrail self-protection ---
 
-GUARD_FILE_RE = re.compile(r"/\.claude/settings(?:\.local)?\.json$|/\.claude/hooks/")
-GUARD_TARGET = r"\.claude/(?:settings(?:\.local)?\.json\b|hooks/)"
-GUARD_BASH_RE = _rx(
-    rf"\b(?:rm|mv|cp|unlink|truncate|shred|tee)\b[^;&|\n]*{GUARD_TARGET}"
-    rf"|\bsed\b[^;&|\n]*\s-i[^;&|\n]*{GUARD_TARGET}"
-    rf"|>\s*[\"']?\S*{GUARD_TARGET}"
-    rf"|\bgit\s+(?:checkout|restore)\b[^;&|\n]*{GUARD_TARGET}")
+GUARD_FILE_RE = re.compile(r"(?:^|/)\.claude/settings(?:\.local)?\.json$|(?:^|/)\.claude/hooks/")
+# a shell word naming the .claude dir, a settings file, or the hooks dir/contents
+GUARD_WORD_RE = re.compile(r"(?:^|/)\.claude(?:/(?:settings(?:\.local)?\.json|hooks(?:/\S*)?))?/?$")
+REL_GUARD_RE = re.compile(r"^(?:\./)?(?:settings(?:\.local)?\.json|hooks(?:/\S*)?)/?$")  # after `cd .claude`
+GUARD_TEXT_RE = re.compile(r"\.claude/(?:settings(?:\.local)?\.json|hooks\b)")
+CODE_WRITE_RE = re.compile(
+    r"open\s*\([^)]*?['\"][wax]\+?b?['\"]|(?<!stdout)(?<!stderr)\.write(?:_text|_bytes)?\s*\(|writeFile(?:Sync)?\s*\("
+    r"|\bos\.(?:remove|unlink|rename|replace)\b|\bshutil\.\w+|\.unlink\s*\(|\.rename\s*\(")
 BANTAY_ENV_RE = re.compile(r"\bexport\s+BANTAY_URL=|\bunset\s+(?:-v\s+)?BANTAY_URL\b|\bBANTAY_ALLOW_MODE=[\"']?allow\b")
+MUTATE_ANY = {"rm", "rmdir", "unlink", "shred", "truncate", "chmod", "chown", "chflags", "tee", "mv"}
+MUTATE_DEST = {"cp", "ln", "install", "rsync"}  # only the last argument (destination) is written
+IN_PLACE = {"sed", "perl", "ruby"}
+
+def _guard_bash(call: ToolCall) -> bool:
+    text = _literal_scan_text(call.command)
+    if BANTAY_ENV_RE.search(text):
+        return True
+    if GUARD_TEXT_RE.search(text) and CODE_WRITE_RE.search(text):  # e.g. a python heredoc rewriting settings
+        return True
+    where = None  # None, "claude" or "hooks": tracks `cd .claude[/hooks]`
+
+    def guarded(w: str) -> bool:
+        if GUARD_WORD_RE.search(w):
+            return True
+        if where == "claude":
+            return bool(REL_GUARD_RE.match(w))
+        return where == "hooks" and not w.startswith(("-", "/", "~", "&", "$"))
+
+    for words in _commands(call.command):
+        name, args = os.path.basename(words[0]), words[1:]
+        if name == "cd":
+            t = args[0] if args else ""
+            where = "hooks" if re.search(r"(?:^|/)\.claude/hooks/?$", t) else \
+                "claude" if re.search(r"(?:^|/)\.claude/?$", t) else None
+            continue
+        for i, w in enumerate(words):
+            if ">" in w:
+                target = w.rsplit(">", 1)[1] or (words[i + 1] if i + 1 < len(words) else "")
+                if target and guarded(target):
+                    return True
+        pos = [a for a in args if not a.startswith("-")]
+        if name in MUTATE_ANY and any(guarded(a) for a in pos):
+            return True
+        if name in MUTATE_DEST and pos and guarded(pos[-1]):
+            return True
+        if name in IN_PLACE and any(a.startswith("--in-place") or (a.startswith("-") and not a.startswith("--") and "i" in a)
+                                    for a in args) and any(guarded(a) for a in pos):
+            return True
+        if name == "dd" and any(a.startswith("of=") and guarded(a[3:]) for a in args):
+            return True
+        sub = _git_subcommand(words)
+        if sub and sub[0] in ("checkout", "restore", "rm", "mv") and any(guarded(a) for a in sub[1] if not a.startswith("-")):
+            return True
+    return False
+
+HOOK_COMMAND_RE = re.compile(r"[\"']?command[\"']?\s*:\s*[\"']\s*(?:[^\"'\s]*/)?bantay-")
+DISABLE_HOOKS_RE = re.compile(r"[\"']?disableAllHooks[\"']?\s*:\s*true")
+
+def _has_bantay_pretooluse(content: str) -> bool:
+    """Does this settings content still register bantay-hook as a PreToolUse command hook?"""
+    try:
+        data = json.loads(content)
+    except ValueError:
+        return "bantay-hook" in content and not DISABLE_HOOKS_RE.search(content)
+    try:
+        if data.get("disableAllHooks") is True:
+            return False
+        return any(re.match(r"\s*(?:\S*/)?bantay-hook\b", str(h.get("command", "")))
+                   for entry in data["hooks"]["PreToolUse"] for h in entry.get("hooks", []))
+    except (AttributeError, KeyError, TypeError):
+        return False
+
+def _edit_removes_hook(old: str, new: str) -> bool:
+    if not new or DISABLE_HOOKS_RE.search(new):
+        return True
+    markers = (r"bantay-hook", HOOK_COMMAND_RE.pattern, r"[\"']PreToolUse[\"']", r"[\"']hooks[\"']")
+    return any(len(re.findall(m, old)) > len(re.findall(m, new)) for m in markers)
 
 def _guardrail_tamper(call: ToolCall) -> bool:
     if call.tool_name == "Bash":
-        return bool(GUARD_BASH_RE.search(_literal_scan_text(call.command)) or BANTAY_ENV_RE.search(call.command))
+        return _guard_bash(call)
     if not GUARD_FILE_RE.search(call.path):
         return False
     if call.tool_name == "Write":
-        return "bantay-hook" not in str(call.tool_input.get("content", ""))
+        return not _has_bantay_pretooluse(str(call.tool_input.get("content", "")))
     edits = [call.tool_input] if call.tool_name == "Edit" else \
         [e for e in (call.tool_input.get("edits") or []) if isinstance(e, dict)]
-    return any(re.search(r"bantay-hook|PreToolUse|hooks", str(e.get("old_string", "")))
-               or not e.get("new_string") for e in edits)
+    return any(_edit_removes_hook(str(e.get("old_string", "")), str(e.get("new_string", "") or "")) for e in edits)
 
 # `cp .env.example .env` seeds a new env file from a template; it reads no secrets.
 TEMPLATE_COPY_RE = re.compile(r"\b(?:cp|mv)\s+(?:-\w+\s+)*\S*\.env\.(?:example|sample|template)\s+\S+")
@@ -322,10 +414,29 @@ def _secret_file_access(call: ToolCall) -> bool:
 
 DISK_RE = _rx(r"\b(?:mkfs(?:\.\w+)?|diskutil\s+(?:erase|reformat)|shutdown|reboot|halt)\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:")
 SQL_DESTROY_RE = _rx(r"\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA)|TRUNCATE(?:\s+TABLE)?\s+\w+|DELETE\s+FROM\s+\w+\s*(?:;|[\"']|$))")
-PIPE_TO_SHELL_RE = _rx(
+PIPE_INTO_RE = _rx(
     r"\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\b(?:\s+-\S+)*\s+)?(?:env\s+)?(?:\S*/)?"
-    r"(?:(?:ba|z|da|k|fi)?sh\b|(?:python[0-9.]*+|perl|ruby|node|php)(?![\w.])(?!\s+-(?:m|c|e|-version)))"
-    r"|\b(?:(?:ba|z|da|k)?sh|python[0-9.]*|perl|ruby|node|source|eval)\b[^|;\n]*?(?:<\(|\$\(|`)\s*(?:curl|wget)\b")
+    r"(?:(?P<shell>(?:ba|z|da|k|fi)?sh\b)|(?P<interp>python[0-9.]*+|perl|ruby|node|php)(?![\w.]))(?P<rest>(?:'[^']*'|\"[^\"]*\"|[^|;&\n'\"])*)")
+SUBST_FETCH_RE = _rx(r"\b(?:(?:ba|z|da|k)?sh|python[0-9.]*|perl|ruby|node|source|eval)\b[^|;\n]*?(?:<\(|\$\(|`)\s*(?:curl|wget)\b")
+# Case-sensitive: `python3 -E` / `perl -M...` are not the safe forms. Safe = print the version, pretty-print
+# JSON, or a quoted one-liner that only reads stdin as data (no exec/eval/system/import machinery).
+SAFE_INTERP_RE = re.compile(
+    r"\s+(?:--version|-m\s+json(?:\.tool)?(?:\s+--?[\w-]+)*|-[ce]\s+(?P<q>['\"])(?P<code>(?:(?!(?P=q)).)*)(?P=q))\s*$", re.S)
+UNSAFE_CODE_RE = re.compile(
+    r"\b(?:exec|eval|compile|__import__|subprocess|system|popen|spawn|child_process|Function|runpy|pty|socket)\b"
+    r"|\bos\.|`|%x")
+
+def _pipe_to_shell(call: ToolCall) -> bool:
+    cmd = call.command
+    if SUBST_FETCH_RE.search(cmd):
+        return True
+    for m in PIPE_INTO_RE.finditer(cmd):
+        if m.group("shell"):
+            return True
+        safe = SAFE_INTERP_RE.match(m.group("rest"))
+        if not safe or (safe.group("code") is not None and UNSAFE_CODE_RE.search(safe.group("code"))):
+            return True
+    return False
 # case-sensitive on purpose: `$monkey` is not a secret, `$OPENAI_API_KEY` is
 ENV_DUMP_RE = re.compile(
     r"(?:^|[;&|(`])\s*(?:printenv\b|(?:env|set)\s*(?:$|[;&|)`]))"
@@ -356,7 +467,7 @@ RULES: list[Rule] = [
     Rule("guardrail_tamper", BASH + ("Write", "Edit", "MultiEdit"), "block",
          "Agent attempted to disable its own guardrail.", predicate=_guardrail_tamper),
     # --- exfiltration / credential access (block) ---
-    Rule("pipe_to_shell", BASH, "block", "Downloads a script and pipes it straight into a shell.", PIPE_TO_SHELL_RE),
+    Rule("pipe_to_shell", BASH, "block", "Downloads a script and pipes it straight into a shell.", predicate=_pipe_to_shell),
     Rule("reverse_shell", BASH, "block", "Opens a reverse shell to a remote host.",
          _rx(r"/dev/tcp/|\bnc\b.*\s-e\s|\bncat\b.*\s-e\s|\bsocat\b.*exec")),
     Rule("upload_file", BASH, "block", "Uploads a local file to a remote host.",
