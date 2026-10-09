@@ -299,7 +299,7 @@ def collapse_heredoc_messages(cmd: str) -> str:
         return cmd
     if not m.group("dash") and re.search(r"(?m)^\t+" + re.escape(d) + r"$", m.group(0)):
         return cmd  # without <<- a tab-indented delimiter does not end the heredoc
-    if COMMIT_TAIL_RUNS_RE.search(cmd[m.end():]):
+    if not COMMIT_SUFFIX_RE.fullmatch(cmd[m.end():]):
         return cmd  # a tail like `&& git log -1 --format=%B | sh` could run the message
     return m.group("pre") + COMMIT_MSG_PLACEHOLDER + " " + cmd[m.end():]  # space: a glued `cmd` stays a separate word
 
@@ -312,10 +312,9 @@ def collapse_heredoc_messages(cmd: str) -> str:
 # absent, a `)` that ends the substitution early leaves the rest of the body inside the outer double quotes
 # (still a literal), and an apostrophe is a syntax error that runs nothing.
 COMMIT_PREFIX_RE = re.compile(r"(?:[ \t]*(?:(?:git|cd)(?:[ \t]+[\w./@:+,%-]+)*[ \t]*)?(?:&&|;|\n))*[ \t]*")
-# What may follow the closing `)"`: nothing, or plain git/cd commands joined by && ; or newline. A pipe
-# (`| sh`) or anything else could run the message, so the soft downgrade does not apply.
-COMMIT_TAIL_RUNS_RE = re.compile(r"\||\b(?:ba|z|da|k)?sh\b|\b(?:eval|source|xargs)\b|\$\(|`|%B|<\(")
-COMMIT_SUFFIX_RE = re.compile(r"(?:[ \t]*(?:&&|;|\n)[ \t]*(?:(?:git|cd)(?:[ \t]+[\w./@:+,%-]+)*)?)*[ \t;]*\n?")
+# What may follow the closing `)"`: nothing, or one plain git/cd command or npm test.
+# Anything else might run the message, so the soft downgrade does not apply.
+COMMIT_SUFFIX_RE = re.compile(r"(?:[ \t]*(?:&&|;|\n)[ \t]*(?:(?:git|cd)(?:[ \t]+[\w./@:+,%-]+)*|npm[ \t]+test)?)?[ \t;]*\n?")
 HEREDOC_COMMIT_RE = re.compile(
     r"(?P<pre>git[ \t]+commit(?=[ \t])[^\n|;&'\"\\`$#<>(){}]*?[ \t](?:-[asnvq]*m|--message)[ \t]*=?[ \t]*)"
     r"\"\$\([ \t]*cat[ \t]+<<(?P<dash>-?)[ \t]*(?P<q>['\"])(?P<d>[A-Za-z_]\w*)(?P=q)[ \t]*\n"
@@ -336,13 +335,13 @@ def without_commit_heredoc_body(cmd: str) -> str | None:
     return cmd[:m.end("pre")] + COMMIT_MSG_PLACEHOLDER + " " + cmd[m.end():]
 
 def commit_heredoc_tail(cmd: str) -> str:
-    """'ok' when the text after the heredoc commit's closing `)"` is empty or plain git/cd commands
-    (COMMIT_SUFFIX_RE), 'runs' when it could feed the message to a shell (COMMIT_TAIL_RUNS_RE), else 'other'."""
+    """Only a single plain git/cd command or npm test may follow a literal message.
+    Unknown tails retain the block: a denylist cannot enumerate ways to execute the message."""
     m = HEREDOC_COMMIT_RE.search(cmd)
     tail = cmd[m.end():] if m else ""
     if COMMIT_SUFFIX_RE.fullmatch(tail):
         return "ok"
-    return "runs" if COMMIT_TAIL_RUNS_RE.search(tail) else "other"
+    return "runs"
 
 def _commit_message_flag(w: str) -> int:
     """Words consumed by a commit message option at w (2 = option + value, 1 = attached value), else 0."""
@@ -656,10 +655,8 @@ POWER_CMDS = set(POWER_NAMES) | {f"{d}/{n}" for d in ("/sbin", "/usr/sbin", "/bi
 _POWER = r"(?:/(?:usr/)?s?bin/)?(?:shutdown|reboot|halt|poweroff)(?![\w.-])"
 POWER_RE = _rx(
     r"(?:(?:^|[;&|`({!'\"]|\$\()|\b(?:then|do|else|sudo|doas|watch|busybox|launchctl|at|nohup|exec|command|time)\b)"
-    r"(?:[ \t]+-\S+)*[ \t]*(?:(?:sudo|doas)(?:[ \t]+-\S+)*[ \t]+)?" + _POWER + r"(?![ \t]*=)"
-    r"|(?<![\w/.-])/(?:usr/)?s?bin/(?:shutdown|reboot|halt|poweroff)(?![\w.-])")
-# ssh's remote command, and a power word printed into a shell
-POWER_REMOTE_RE = _rx(r"\bssh\b[^|;&\n]*\s['\"]?(?:(?:sudo|doas)\s+(?:-\S+\s+)*)?" + _POWER)
+    r"(?:[ \t]+-\S+)*[ \t]*(?:(?:sudo|doas)(?:[ \t]+-\S+)*[ \t]+)?" + _POWER + r"(?![ \t]*=)")
+# A power word printed into a shell; remote commands are parsed by _power_invocation.
 POWER_PIPE_RE = _rx(r"\b(?:echo|printf)\b[^|;&\n]*\b(?:shutdown|reboot|halt|poweroff)\b[^|;&\n]*\|\s*(?:(?:sudo|doas)\s+)?(?:\S*/)?(?:ba|z|da|k)?sh\b")
 POWER_VAR_RE = _rx(r"(?<![\w-])[A-Za-z_]\w*=['\"]?(?:(?:sudo|doas)\s+)?" + _POWER)
 
@@ -668,13 +665,39 @@ HEREDOC_COMMIT_HINT_RE = re.compile(r"\bgit\s+commit\b[\s\S]*<<")
 
 def _disk_or_system(call: ToolCall) -> bool:
     text = _literal_scan_text(call.command)
-    if DISK_RE.search(text) or POWER_RE.search(text) or POWER_REMOTE_RE.search(text) or POWER_PIPE_RE.search(call.command):
+    # Quotes around an argument do not make it a command. Keep positional regexes outside quotes;
+    # actual quoted commands and remote/shell scripts are checked through their parsed command slots.
+    unquoted = re.sub(r"'[^']*'|\"(?:\\.|[^\"\\])*\"", " literal ", text)
+    if DISK_RE.search(text) or POWER_RE.search(unquoted) or POWER_PIPE_RE.search(call.command):
         return True
     # Inside a heredoc commit the strict collapse refused, the word itself still counts: `evaluate` softens
     # it to ask when the message is plain text, and keeps the block when the shape could run the body.
     if HEREDOC_COMMIT_HINT_RE.search(call.command) and POWER_WORD_RE.search(text):
         return True
-    return any(words[0] in POWER_CMDS for words in _commands(call.command))
+    return any(_power_invocation(words) for words in _commands(call.command))
+
+def _power_invocation(words: list[str], depth: int = 0) -> bool:
+    if not words or depth > 3:
+        return False
+    if words[0] in POWER_CMDS:
+        return True
+    if words[0] in {"then", "do", "else", "{", "!"}:
+        return _power_invocation(words[1:], depth + 1)
+    name = os.path.basename(words[0])
+    if name == "ssh":
+        i = 1
+        while i < len(words) and words[i].startswith("-"):
+            i += 2 if words[i] in {"-i", "-o", "-p", "-l", "-F", "-J", "-L", "-R", "-D", "-S", "-W", "-b", "-c", "-m"} else 1
+        script = " ".join(words[i + 1:])  # skip destination; remaining words are a remote shell script
+        return any(_power_invocation(w, depth + 1) for w in _commands(script))
+    if name in {"watch", "busybox", "launchctl", "at", "doas"}:
+        rest = words[1:]
+        if name == "at" and "<<<" in rest:
+            rest = rest[rest.index("<<<") + 1:]
+        while rest and rest[0].startswith("-"):
+            rest = rest[2:] if rest[0] in {"-n", "--interval", "-u"} else rest[1:]
+        return any(_power_invocation(w, depth + 1) for w in _commands(" ".join(rest)))
+    return False
 SQL_DESTROY_RE = _rx(r"\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA)|TRUNCATE(?:\s+TABLE)?\s+\w+|DELETE\s+FROM\s+\w+\s*(?:;|[\"']|$))")
 PIPE_INTO_RE = _rx(
     r"\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\b(?:\s+-\S+)*\s+)?(?:env\s+)?(?:\S*/)?"
@@ -736,7 +759,11 @@ def _sudo_destructive(call: ToolCall) -> bool:
             continue
         if name in SUDO_ALWAYS or name.startswith("mkfs"):
             return True
-        system = lambda a: bool(SYSTEM_DIR_RE.match(a) or SYSTEM_TREE_RE.match(a))
+        def system(a):
+            # Ordinary configuration edits need consent; destructive moves/permissions still block.
+            if name in {"tee", "cp", "mkdir", "install", "rsync", "ditto"} and re.match(r"^/(?:private/)?etc/", a):
+                return False
+            return bool(SYSTEM_DIR_RE.match(a) or SYSTEM_TREE_RE.match(a))
         if name in SYS_ANY_OPERAND and any(system(a) for a in pos):
             return True
         if name in SYS_DEST_OPERAND and pos and system(pos[-1]):
@@ -878,10 +905,12 @@ def evaluate(call: ToolCall) -> Decision | None:
                 if hard:
                     return _decision(hard)
                 outside = _first_match(replace(call, tool_input={**call.tool_input, "command": stripped}))
-                if outside:
+                if outside and outside.verdict == "block":
                     return _decision(outside)
                 if commit_heredoc_tail(call.command) == "runs":  # `)" | sh` could run the message
                     return _decision(first)
+                if outside:
+                    return _decision(outside)
                 return Decision("ask", COMMIT_BODY_REASON, "rule", rule=first.name)
         return _decision(first)
     except Exception as e:  # rules must never crash the judge

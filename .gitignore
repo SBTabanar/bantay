@@ -8,3 +8,4 @@ demo/sample-project/node_modules/
 .DS_Store
 out/
 data/raw_smoke/
+adapters/bantay-lora/train.log

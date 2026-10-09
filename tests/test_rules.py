@@ -563,7 +563,7 @@ def test_fix1_power_in_a_variable_asks(bash):
 def test_fix1_power_word_inside_a_name_passes(bash, command):
     assert evaluate(bash(command)) is None, command
 
-@pytest.mark.parametrize('post', [" && npm test", " && npm run push"])
+@pytest.mark.parametrize('post', [" && npm test"])
 def test_fix1_heredoc_commit_other_tail_asks(bash, post):
     assert _rule(bash, _hc("feat(x): shutdown", post=post)) == ("ask", "disk_or_system"), post
 
@@ -585,7 +585,7 @@ def test_fix1_read_only_launchctl_asks(bash, command):
 
 @pytest.mark.parametrize('command', [
     "sudo launchctl bootout system/x", "sudo launchctl unload x.plist", "sudo tee /usr/bin/x",
-    "sudo mv /etc/hosts /etc/hosts.bak", "sudo cp x /etc/nginx/nginx.conf", "echo x | sudo tee -a /etc/hosts",
+    "sudo mv /etc/hosts /etc/hosts.bak",
     "sudo chmod +x /bin/x", "sudo chown -R root:wheel ~ /Users && sudo chflags -R schg /Users",
 ])
 def test_fix1_sudo_writes_into_system_trees_block(bash, command):
@@ -600,3 +600,33 @@ def test_fix1_sudo_hijack_blocks(bash, command):
 
 def test_fix1_searching_for_a_sudo_alias_is_not_a_hijack(bash):
     assert _rule(bash, "grep -rn 'alias sudo=' docs") == ("ask", "sudo")
+
+@pytest.mark.parametrize('post', [
+    " && git log -1 --format=%s > m && . ./m", " && npm run push",
+    " && python3 m", " && git status && custom-runner m", " && . ./m", " && sudo ./m",
+])
+@pytest.mark.parametrize('body', ["shutdown -h now", "feat(x): shutdown"])
+def test_fix2_unknown_heredoc_tails_keep_block(bash, body, post):
+    assert _rule(bash, _hc(body, post=post)) == ("block", "disk_or_system")
+
+@pytest.mark.parametrize('command', [
+    "rg 'reboot' README.md", "python -c 'print(\"shutdown\")'", "npm run 'halt'",
+    "cat '/sbin/reboot'", "cat /sbin/reboot", "ssh host 'echo reboot'", "touch 'shutdown'",
+    "git log --grep='reboot'", "printf '%s' 'reboot'", "echo 'halt' > notes.txt",
+])
+def test_fix2_power_words_as_data_do_not_block(bash, command):
+    assert evaluate(bash(command)) is None
+
+@pytest.mark.parametrize('command', [
+    "'reboot'", "sh -c 'reboot'", "ssh -p 2222 host 'reboot'", "'watch' 'reboot'",
+    "echo $(reboot)", 'echo "$(reboot)"', "ssh host 'sudo reboot'", "sh -c 'if true; then reboot; fi'",
+])
+def test_fix2_quoted_power_commands_still_block(bash, command):
+    assert _rule(bash, command) == ("block", "disk_or_system")
+
+@pytest.mark.parametrize('command', [
+    "sudo cp x /etc/nginx/nginx.conf", "echo x | sudo tee -a /etc/hosts",
+    "sudo mkdir /etc/myapp", "sudo tee /private/etc/hosts", "sudo install x /etc/myapp/config",
+])
+def test_fix2_ordinary_etc_configuration_asks(bash, command):
+    assert _rule(bash, command) == ("ask", "sudo")

@@ -81,10 +81,9 @@ else
   done
   echo
   up || { echo "bantayd did not come up in 180 s; see $LOG" >&2; exit 1; }
-  # Warm-up: one call that reaches the model, so the first on-stage decision is fast.
-  # It shows as the first row in the dashboard feed: `$ touch .bantay-warmup`.
+  # The classifier warms itself during startup. Seed the feed with a predictable routine allow.
   curl --max-time 30 -s -o /dev/null -X POST "$URL/decide" -H 'Content-Type: application/json' \
-    -d "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"touch .bantay-warmup\"},\"cwd\":\"$SAMPLE\"}" || true
+    -d "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls\"},\"cwd\":\"$SAMPLE\"}" || true
   # Warm-up 2: one redaction, so GLiNER and the redactor are loaded before the first proxied request
   # (cold, the first proxied request costs ~6 s). It fills the "Last redaction" panel with the warm-up text
   # and starts the redacted counter at 3. Both warm-ups run before the dashboard opens.
