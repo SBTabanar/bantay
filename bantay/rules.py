@@ -179,39 +179,30 @@ def _redirections(args: list[str]) -> list[str]:
 
 SUBSTITUTIONS = ("$(", "`", "<(", ">(")
 
-# Claude Code commits with `git commit -m "$(cat <<'EOF'\n<message>\nEOF\n)"`. With a quoted delimiter
-# the shell expands nothing in the body, so the substitution is a literal message. Only that exact shape
-# is collapsed, and only where the shell provably sees it as one: the `git commit` must start a command
-# with nothing quoted, escaped, commented, substituted or heredoc'd before it (otherwise the match may sit
-# inside a string and the "body" may be live shell), and the body must hold no substitution, no `"`
-# (macOS bash 3.2 ends the substitution at an unbalanced `)`, and escaping the outer quotes needs a `"`),
-# and no line equal to the delimiter (which would end the heredoc early and run what follows).
+# Claude Code commits with `git commit -m "$(cat <<'EOF'\n<message>\nEOF\n)"`. For the rules scan only
+# (never the allowlist), that message is treated as a literal so its words (shutdown, DROP TABLE) do not
+# trip a rule. The shape is strict, and anything else is scanned raw (the safe direction): the command must
+# begin with `git commit` (nothing before it can rebind `cat` via alias/hash/PATH), the delimiter must be
+# quoted, and the body may hold none of $ ` " ' \ ( ) (bash 3.2 ends the substitution at an unbalanced `)`
+# and then evaluates what follows) nor a line equal to the delimiter (which would end the heredoc early).
 HEREDOC_MSG_RE = re.compile(
-    r"(?:^|(?<=[;&|\n]))(?P<pre>[ \t]*git[ \t]+commit(?=[ \t])[^\n|;&'\"\\`$#<>(){}]*?[ \t]"
-    r"(?:-[asnvq]*m|--message)[ \t]*=?[ \t]*)"
+    r"\A(?P<pre>[ \t]*git[ \t]+commit(?=[ \t])[^\n|;&'\"\\`$#<>(){}]*?[ \t](?:-[asnvq]*m|--message)[ \t]*=?[ \t]*)"
     r"\"\$\([ \t]*cat[ \t]+<<(?P<dash>-?)[ \t]*(?P<q>['\"])(?P<d>[A-Za-z_]\w*)(?P=q)[ \t]*\n"
     r"(?P<body>(?:.*\n)*?)\t*(?P=d)\n[ \t]*\)\"")
-# Everything before a collapsible commit: plain words and command separators, nothing that opens a
-# quote, escape, comment, substitution, heredoc or group.
-SAFE_PREFIX_RE = re.compile(r"[^'\"\\`$#<>(){}]*")
-COMMIT_MSG_PLACEHOLDER = "heredoc-message"  # unquoted, so a later heredoc message keeps a safe prefix
+UNSAFE_BODY_RE = re.compile(r"[$`\"'\\()]")
+COMMIT_MSG_PLACEHOLDER = "heredoc-message"
 
 def collapse_heredoc_messages(cmd: str) -> str:
-    """`cmd` with each literal heredoc commit message replaced by a short placeholder word."""
-    def repl(m: re.Match) -> str:
-        body, d = m.group("body"), m.group("d")
-        if not SAFE_PREFIX_RE.fullmatch(m.string[:m.start()]):
-            return m.group(0)
-        if any(x in body for x in SUBSTITUTIONS) or '"' in body or any(line.strip() == d for line in body.split("\n")):
-            return m.group(0)
-        if not m.group("dash") and re.search(r"(?m)^\t+" + re.escape(d) + r"$", m.group(0)):
-            return m.group(0)  # without <<- a tab-indented delimiter does not end the heredoc
-        return m.group("pre") + COMMIT_MSG_PLACEHOLDER
-    while True:
-        new = HEREDOC_MSG_RE.sub(repl, cmd)
-        if new == cmd:
-            return cmd
-        cmd = new
+    """`cmd` with a leading literal heredoc commit message replaced by a placeholder word (rules scan only)."""
+    m = HEREDOC_MSG_RE.match(cmd)
+    if not m:
+        return cmd
+    body, d = m.group("body"), m.group("d")
+    if UNSAFE_BODY_RE.search(body) or any(line.strip() == d for line in body.split("\n")):
+        return cmd
+    if not m.group("dash") and re.search(r"(?m)^\t+" + re.escape(d) + r"$", m.group(0)):
+        return cmd  # without <<- a tab-indented delimiter does not end the heredoc
+    return m.group("pre") + COMMIT_MSG_PLACEHOLDER + cmd[m.end():]
 
 def _commit_message_flag(w: str) -> int:
     """Words consumed by a commit message option at w (2 = option + value, 1 = attached value), else 0."""

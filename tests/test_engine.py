@@ -123,9 +123,7 @@ def _heredoc_commit(body, delim="'EOF'", flag="-m"):
     return f'git commit {flag} "$(cat <<{delim}\n{body}\n{d}\n)"'
 
 def test_review_wave_routine_git_allowlisted(bash):
-    for command in [_heredoc_commit("fix shutdown handler"), _heredoc_commit("fix parser\n\nLonger body."),
-                    _heredoc_commit("fix shutdown handler", delim='"EOF"'), _heredoc_commit("x", flag="-am"),
-                    'git commit -am "fix shutdown handler"', 'git commit -a -m "fix parser"',
+    for command in ['git commit -am "fix shutdown handler"', 'git commit -m "fix shutdown handler"', 'git commit -a -m "fix parser"',
                     'git add src/app.ts README.md', 'git add ./src/app.ts', 'git push origin feature/x']:
         fc = FakeClassifier('block')
         d = Engine(fc).decide(bash(command))
@@ -159,11 +157,7 @@ def test_round_2_attacks_never_allowlisted(bash):
         assert d.source != 'allowlist' and d.verdict != 'allow', (command, d)
 
 def test_round_2_routine_forms_stay_allowlisted(bash):
-    for command in [_heredoc_commit("fix shutdown handler", delim='"EOF"'),
-                    "git commit -m \"$(cat <<-'EOF'\n\tfix parser\n\tEOF\n)\"",
-                    _heredoc_commit("handle EOFError on empty stdin"), _heredoc_commit("fix (scope): trim input"),
-                    _heredoc_commit("ok\n\n- bullet one\n- bullet two"),
-                    'git add -- src/a.ts', "git add 'src/my file.ts'", 'git add src/token_utils.py',
+    for command in ['git add -- src/a.ts', "git add 'src/my file.ts'", 'git add src/token_utils.py',
                     'git push origin HEAD', 'git push -u origin feature/x', 'git pull --ff-only origin main']:
         fc = FakeClassifier('block')
         d = Engine(fc).decide(bash(command))
@@ -174,3 +168,20 @@ def test_ls_allowlisted_unless_secret_path():
     assert Engine(fc).decide(ToolCall("LS", {"path": "src"}, cwd="/p")).source == "allowlist" and not fc.calls
     d = Engine(fc).decide(ToolCall("LS", {"path": "~/.ssh"}, cwd="/p"))
     assert d.verdict == "block" and d.rule == "read_secret_file"
+
+
+HEREDOC_ROUTINE = [_heredoc_commit("fix shutdown handler"), _heredoc_commit("fix parser\n\nLonger body."),
+                   _heredoc_commit("fix shutdown handler", delim='"EOF"'), _heredoc_commit("x", flag="-am"),
+                   "git commit -m \"$(cat <<-'EOF'\n\tfix parser\n\tEOF\n)\"",
+                   _heredoc_commit("handle EOFError on empty stdin"), _heredoc_commit("fix (scope): trim input"),
+                   _heredoc_commit("don't break"), _heredoc_commit("ok\n\n- bullet one\n- bullet two")]
+
+def test_round_3_heredoc_commits_go_to_the_model(bash):
+    """No heredoc commit is allowlisted; rules stay quiet on benign ones and the model decides."""
+    from bantay.engine import routine_git
+    for command in HEREDOC_ROUTINE + ['git add a.ts && git commit -m "x"', 'git commit -m "$(date)"',
+                                      'git commit -m "a\nb"', 'git commit -m x | tee log', 'git commit -m `id`']:
+        assert not routine_git(command), command
+        fc = FakeClassifier('allow')
+        d = Engine(fc).decide(bash(command))
+        assert d.source == 'model' and fc.calls, (command, d)

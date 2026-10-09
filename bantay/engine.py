@@ -50,8 +50,7 @@ def _plain_add_path(a: str) -> bool:
 
 def routine_git(command: str) -> bool:
     """Narrow routine mutation forms; unknown options retain model review."""
-    # Claude Code's `-m "$(cat <<'EOF' ... EOF)"` is a literal message; see rules.collapse_heredoc_messages.
-    command = rules.collapse_heredoc_messages(command)
+    # Any substitution, heredoc, newline or chaining (incl. Claude Code's heredoc commits) goes to the model.
     if re.search(r"[|;&<>`$(){}\n\r]", command):
         return False
     try:

@@ -268,3 +268,63 @@ def test_credential_lookalikes_pass(bash, command):
 def test_ls_paths_checked_for_secrets(path, verdict):
     d = evaluate(ToolCall("LS", {"path": path}, cwd="/p"))
     assert (d.verdict if d else None) == verdict, (path, d)
+
+
+# --- review fix wave, round 3: strict collapse (rules scan only) ---
+from bantay.rules import collapse_heredoc_messages
+
+# Reviewer bypass shapes with a harmless `touch` marker: none of them may be collapsed.
+NOT_COLLAPSED = [
+    # something before the commit can rebind `cat` (hash / alias / PATH)
+    "hash -p /bin/sh cat; git commit -m \"$(cat <<'EOF'\ntouch M6\nEOF\n)\"",
+    "hash cat=/bin/sh; git commit -m \"$(cat <<'EOF'\ntouch M6z\nEOF\n)\"",
+    "alias cat=sh\ngit commit -m \"$(cat <<'EOF'\ntouch M7\nEOF\n)\"",
+    "PATH=/tmp/e:/usr/bin:/bin\ngit commit -m \"$(cat <<'EOF'\ntouch M8\nEOF\n)\"",
+    "X=1 git commit -m \"$(cat <<'EOF'\ntouch M9\nEOF\n)\"",
+    # bash 3.2 ends the substitution at an unbalanced `)` and evaluates what follows
+    "git commit -m \"$(cat <<'EOF'\nx\nEOF)\ntouch M14\nEOF\n)\"",
+    "git commit -m \"$(cat <<'EOF'\na)\n$[ b[${x:-$}(touch M4)] ]\nEOF\n)\"",
+    "git commit -m \"$(cat <<'EOF'\na)b\nEOF\n)\"",
+    # an apostrophe body breaks real bash 3.2
+    "git commit -m \"$(cat <<'EOF'\ndon't break\nEOF\n)\"",
+    "git commit -m \"$(cat <<'EOF'\na \\\\ b\nEOF\n)\"",
+    "git commit -m \"$(cat <<EOF\nunquoted delimiter\nEOF\n)\"",
+]
+
+@pytest.mark.parametrize('command', NOT_COLLAPSED)
+def test_round_3_unsafe_heredoc_shapes_not_collapsed(command):
+    assert collapse_heredoc_messages(command) == command
+
+@pytest.mark.parametrize('command', [
+    "hash -p /bin/sh cat; git commit -m \"$(cat <<'EOF'\nrm -rf ~\nEOF\n)\"",
+    "alias cat=sh\ngit commit -m \"$(cat <<'EOF'\nrm -rf ~\nEOF\n)\"",
+    "PATH=/tmp/e:/usr/bin:/bin\ngit commit -m \"$(cat <<'EOF'\nrm -rf ~\nEOF\n)\"",
+    "git commit -m \"$(cat <<'EOF'\nx\nEOF)\nrm -rf ~\nEOF\n)\"",
+    "git commit -m \"$(cat <<'EOF'\na)\n$[ b[${x:-$}(rm -rf ~)] ]\nEOF\n)\"",
+])
+def test_round_3_bypass_shapes_blocked(bash, command):
+    d = evaluate(bash(command))
+    assert d and d.verdict == "block" and d.rule == "rm_outside_project", (command, d)
+
+@pytest.mark.parametrize('command', [
+    "git commit -m \"$(cat <<'EOF'\nfix shutdown handler\nEOF\n)\"",
+    "git commit -m \"$(cat <<\"EOF\"\nfix shutdown handler\nEOF\n)\"",
+    "git commit -m \"$(cat <<-'EOF'\n\tfix shutdown handler\n\tEOF\n)\"",
+    "  git commit -am \"$(cat <<'EOF'\nfix shutdown handler\n\nhandle reboot and halt\nEOF\n)\"",
+])
+def test_round_3_plain_heredoc_still_literal(bash, command):
+    assert collapse_heredoc_messages(command) != command
+    assert evaluate(bash(command)) is None, command
+
+@pytest.mark.parametrize('name,secret', [
+    ("aws-credentials.csv", True), ("secrets.yaml", True), ("token.json", True), ("api_token.txt", True),
+    ("config/private_key.pem", True), ("deploy/server.key", True), ("x/push.p8", True), ("vault.kdbx", True),
+    ("tokenizer.json", False), ("design-tokens.json", False), ("tokens.css", False), ("secret_santa.ts", False),
+    (".github/workflows/secret-scan.yml", False), ("docs/api_token.txt", False), ("tests/fixtures/token.json", False),
+    ("node_modules/pkg/credentials.json", False), ("src/token_utils.py", False),
+])
+def test_round_3_credential_filenames(bash, name, secret):
+    d = evaluate(bash(f"cat {name}"))
+    assert (d is not None and d.verdict == "block") == secret, (name, d)
+    d = evaluate(ToolCall("Read", {"file_path": f"/p/{name}"}, cwd="/p"))
+    assert (d is not None and d.rule == "read_secret_file") == secret, (name, d)

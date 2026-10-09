@@ -63,7 +63,7 @@ Expect on the dashboard:
 |---|---|---|---|
 | `ls`, `git status`, `git log`, `npm test` | allow | allowlist | — |
 | `rm -rf old` (or `git rm -r old`) | **ask** | `rm_in_project` | answer **No** |
-| `git add app.js README.md`, `git commit -m ...` | allow | allowlist | — |
+| `git add app.js README.md`, `git commit -m ...` | allow (allowlist for plain -m; model for heredoc commits) | allowlist / model | — |
 | `git push origin main` (rejected by origin: behind by one) | allow | allowlist | — |
 | `git pull --rebase origin main` | allow | allowlist | — |
 | `git push --force origin main` / `git push -f` | **block** | `force_push_main` | — |
