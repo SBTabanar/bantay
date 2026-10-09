@@ -116,3 +116,28 @@ def test_git_mutation_allowlist_retains_review_for_risky_forms(bash):
         fc = FakeClassifier('block')
         d = Engine(fc).decide(bash(command))
         assert d.source != 'allowlist' and d.verdict != 'allow', (command, d)
+
+
+def _heredoc_commit(body, delim="'EOF'", flag="-m"):
+    d = delim.strip("'\"")
+    return f'git commit {flag} "$(cat <<{delim}\n{body}\n{d}\n)"'
+
+def test_review_wave_routine_git_allowlisted(bash):
+    for command in [_heredoc_commit("fix shutdown handler"), _heredoc_commit("fix parser\n\nLonger body."),
+                    _heredoc_commit("fix shutdown handler", delim='"EOF"'), _heredoc_commit("x", flag="-am"),
+                    'git commit -am "fix shutdown handler"', 'git commit -a -m "fix parser"',
+                    'git add src/app.ts README.md', 'git add ./src/app.ts', 'git push origin feature/x']:
+        fc = FakeClassifier('block')
+        d = Engine(fc).decide(bash(command))
+        assert d.source == 'allowlist' and d.verdict == 'allow' and not fc.calls, (command, d)
+
+def test_review_wave_broad_or_local_forms_reach_judge(bash):
+    for command in ['git add ./', 'git add src/..', 'git add /abs/project', 'git add ~', 'git add ~/proj',
+                    'git add ..', 'git add ../other', 'git add src/../../x', 'git add :/', 'git add ":(top)"',
+                    'git push /tmp/exfil main', 'git push ./mirror main', 'git push ../copy', 'git push ~/x main',
+                    'git pull /tmp/evil main', 'git pull . main',
+                    _heredoc_commit("x", delim="EOF"), _heredoc_commit("msg $(id)"), 'git commit -am',
+                    _heredoc_commit("ok") + " && python steal.py"]:
+        fc = FakeClassifier('block')
+        d = Engine(fc).decide(bash(command))
+        assert d.source != 'allowlist' and d.verdict != 'allow', (command, d)

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import re, shlex, time
+import os, re, shlex, time
 from .types import ToolCall, Decision
 from . import rules
 
@@ -38,8 +38,19 @@ _OPTION_EXEC = (
 ALLOWLIST_RE = re.compile(r"^[ \t]*" + _OPTION_EXEC + r"(?:" + _WITH_ARGS + r"|" + _EXACT + r")\Z")
 
 
+def _plain_add_path(a: str) -> bool:
+    """An explicit path below the project: no option, glob, pathspec magic, home, absolute or parent path,
+    and nothing that normalizes to the project root (`./`, `src/..`)."""
+    if a.startswith(("-", "~", ":")) or re.search(r"[*?\[\]]", a):
+        return False
+    n = os.path.normpath(a)
+    return not (os.path.isabs(n) or n in (".", "..") or n.startswith("../"))
+
+
 def routine_git(command: str) -> bool:
     """Narrow routine mutation forms; unknown options retain model review."""
+    # Claude Code's `-m "$(cat <<'EOF' ... EOF)"` is a literal message; see rules.collapse_heredoc_messages.
+    command = rules.collapse_heredoc_messages(command)
     if re.search(r"[|;&<>`$(){}\n\r]", command):
         return False
     try:
@@ -53,16 +64,20 @@ def routine_git(command: str) -> bool:
         # Explicit paths only: broad staging may include an unmentioned credential file.
         if args[:1] == ["--"]:
             args = args[1:]
-        return bool(args) and all(not a.startswith("-") and a not in (".", "..", ":/")
-                                  and not re.search(r"[*?\[\]]", a) for a in args)
+        return bool(args) and all(_plain_add_path(a) for a in args)
     if sub == "commit":
-        # A fresh commit with a literal message; amend, hooks/config overrides stay reviewed.
+        # A fresh commit with a literal message (optionally -a); amend, hooks/config overrides stay reviewed.
+        if args[:1] == ["-a"]:
+            args = args[1:]
+        elif args[:1] == ["-am"]:
+            args = ["-m"] + args[1:]
         return len(args) == 2 and args[0] in ("-m", "--message") and bool(args[1])
     if sub in ("pull", "push"):
         flags = {"--ff-only", "--rebase", "--no-rebase"} if sub == "pull" else {"-u", "--set-upstream"}
         positional = [a for a in args if a not in flags]
+        # A remote that is a local path (/tmp/x, ./x, ../x, ~/x) can copy the repo anywhere: model review.
         return len(positional) <= 2 and all(
-            not a.startswith(("-", "+", ":")) and ":" not in a and not re.search(r"[*?\[\]]", a)
+            not a.startswith(("-", "+", ":", "/", ".", "~")) and ":" not in a and not re.search(r"[*?\[\]]", a)
             for a in positional)
     return False
 

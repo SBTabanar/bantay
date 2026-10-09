@@ -179,11 +179,45 @@ def _redirections(args: list[str]) -> list[str]:
 
 SUBSTITUTIONS = ("$(", "`", "<(", ">(")
 
+# Claude Code commits with `git commit -m "$(cat <<'EOF'\n<message>\nEOF\n)"`. With a quoted delimiter
+# the shell expands nothing in the body, so the substitution is a literal message. Only that exact shape
+# is collapsed: an unquoted delimiter, a body holding a substitution, or a body line equal to the
+# delimiter (which would end the heredoc early and run what follows) leaves the command untouched.
+HEREDOC_MSG_RE = re.compile(
+    r"(?P<pre>\bgit[ \t]+commit\b[^\n|;&]*?[ \t](?:-[asnvq]*m|--message)[ \t]*=?[ \t]*)"
+    r"\"\$\([ \t]*cat[ \t]+<<(?P<dash>-?)[ \t]*(?P<q>['\"])(?P<d>[A-Za-z_]\w*)(?P=q)[ \t]*\n"
+    r"(?P<body>(?:.*\n)*?)\t*(?P=d)\n[ \t]*\)\"")
+COMMIT_MSG_PLACEHOLDER = "'heredoc-message'"
+
+def collapse_heredoc_messages(cmd: str) -> str:
+    """`cmd` with each literal heredoc commit message replaced by a short quoted placeholder."""
+    def repl(m: re.Match) -> str:
+        body, d = m.group("body"), m.group("d")
+        if any(x in body for x in SUBSTITUTIONS) or any(line.strip() == d for line in body.split("\n")):
+            return m.group(0)
+        if not m.group("dash") and re.search(r"(?m)^\t+" + re.escape(d) + r"$", m.group(0)):
+            return m.group(0)  # without <<- a tab-indented delimiter does not end the heredoc
+        return m.group("pre") + COMMIT_MSG_PLACEHOLDER
+    while True:
+        new = HEREDOC_MSG_RE.sub(repl, cmd)
+        if new == cmd:
+            return cmd
+        cmd = new
+
+def _commit_message_flag(w: str) -> int:
+    """Words consumed by a commit message option at w (2 = option + value, 1 = attached value), else 0."""
+    if w in ("-m", "--message") or re.fullmatch(r"-[asnvq]*m", w):
+        return 2
+    if w.startswith("--message=") or re.match(r"-[asnvq]*m", w):
+        return 1
+    return 0
+
 def _literal_scan_text(cmd: str) -> str:
     """The command with grep/rg search patterns and echo/printf literals removed, so a string that
     is only searched for or printed (e.g. `grep -rn "DROP TABLE"`) does not trip a rule. A grep whose
     pattern holds a command/process substitution, and an echo containing one or piped onward, are
     left untouched."""
+    cmd = collapse_heredoc_messages(cmd)
     out, last = [], 0
     for a, b in _segment_spans(cmd):
         seg = cmd[a:b]
@@ -199,10 +233,9 @@ def _literal_scan_text(cmd: str) -> str:
         elif words[:2] == ["git", "commit"] and not any(x in seg for x in SUBSTITUTIONS):
             new, i = words[:2], 2
             while i < len(words):
-                if words[i] in ("-m", "--message"):
-                    i += 2
-                elif words[i].startswith("--message=") or words[i].startswith("-m"):
-                    i += 1
+                step = _commit_message_flag(words[i])
+                if step:
+                    i += step
                 else:
                     new.append(words[i]); i += 1
         elif name in ("echo", "printf") and not any(x in seg for x in SUBSTITUTIONS) \
@@ -326,12 +359,13 @@ def _secret_file_git_add(call: ToolCall) -> bool:
 
 # --- guardrail self-protection ---
 
-OPENCODE_GUARD_RE = re.compile(r"(?:^|/)(?:\.opencode|\.config/opencode)/plugins?(?:/|$)")
-GUARD_FILE_RE = re.compile(r"(?:^|/)\.claude/settings(?:\.local)?\.json$|(?:^|/)\.claude/hooks/")
+# Guard paths match case-insensitively: macOS volumes are, so .Claude/Settings.json is the same file.
+OPENCODE_GUARD_RE = re.compile(r"(?:^|/)(?:\.opencode|\.config/opencode)/plugins?(?:/|$)", re.I)
+GUARD_FILE_RE = re.compile(r"(?:^|/)\.claude/settings(?:\.local)?\.json$|(?:^|/)\.claude/hooks/", re.I)
 # a shell word naming the .claude dir, a settings file, or the hooks dir/contents
-GUARD_WORD_RE = re.compile(r"(?:^|/)\.claude(?:/(?:settings(?:\.local)?\.json|hooks(?:/\S*)?))?/?$")
-REL_GUARD_RE = re.compile(r"^(?:\./)?(?:settings(?:\.local)?\.json|hooks(?:/\S*)?)/?$")  # after `cd .claude`
-GUARD_TEXT_RE = re.compile(r"\.claude/(?:settings(?:\.local)?\.json|hooks\b)")
+GUARD_WORD_RE = re.compile(r"(?:^|/)\.claude(?:/(?:settings(?:\.local)?\.json|hooks(?:/\S*)?))?/?$", re.I)
+REL_GUARD_RE = re.compile(r"^(?:\./)?(?:settings(?:\.local)?\.json|hooks(?:/\S*)?)/?$", re.I)  # after `cd .claude`
+GUARD_TEXT_RE = re.compile(r"\.claude/(?:settings(?:\.local)?\.json|hooks\b)", re.I)
 CODE_WRITE_RE = re.compile(
     r"open\s*\([^)]*?['\"][wax]\+?b?['\"]|(?<!stdout)(?<!stderr)\.write(?:_text|_bytes)?\s*\(|writeFile(?:Sync)?\s*\("
     r"|\bos\.(?:remove|unlink|rename|replace)\b|\bshutil\.\w+|\.unlink\s*\(|\.rename\s*\(")
@@ -355,13 +389,13 @@ def _guard_bash(call: ToolCall) -> bool:
         if where == "claude":
             return bool(REL_GUARD_RE.match(w))
         if where == "opencode":
-            return bool(re.match(r"^(?:\./)?plugins?(?:/|$)", w))
+            return bool(re.match(r"^(?:\./)?plugins?(?:/|$)", w, re.I))
         return where in ("hooks", "plugins") and not w.startswith(("-", "/", "~", "&", "$"))
 
     for words in _commands(call.command):
         name, args = os.path.basename(words[0]), words[1:]
         if name == "cd":
-            t = args[0] if args else ""
+            t = os.path.normpath(args[0]).casefold() if args else ""
             where = "hooks" if re.search(r"(?:^|/)\.claude/hooks/?$", t) else \
                 "claude" if re.search(r"(?:^|/)\.claude/?$", t) else None
             if re.search(r"(?:^|/)(?:\.opencode|\.config/opencode)/plugins?/?$", t):
@@ -417,7 +451,7 @@ def _guardrail_tamper(call: ToolCall) -> bool:
         return _guard_bash(call)
     if OPENCODE_GUARD_RE.search(os.path.normpath(call.path).casefold()):
         return True
-    if not GUARD_FILE_RE.search(call.path):
+    if not GUARD_FILE_RE.search(os.path.normpath(call.path) if call.path else ""):
         return False
     if call.tool_name == "Write":
         return not _has_bantay_pretooluse(str(call.tool_input.get("content", "")))
@@ -435,7 +469,7 @@ DISK_RE = _rx(r"\b(?:mkfs(?:\.\w+)?|diskutil\s+(?:erase|reformat)|shutdown|reboo
 SQL_DESTROY_RE = _rx(r"\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA)|TRUNCATE(?:\s+TABLE)?\s+\w+|DELETE\s+FROM\s+\w+\s*(?:;|[\"']|$))")
 PIPE_INTO_RE = _rx(
     r"\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\b(?:\s+-\S+)*\s+)?(?:env\s+)?(?:\S*/)?"
-    r"(?:(?P<shell>(?:ba|z|da|k|fi)?sh\b)|(?P<interp>python[0-9.]*+|perl|ruby|node|php)(?![\w.]))(?P<rest>(?:'[^']*'|\"[^\"]*\"|[^|;&\n'\"])*)")
+    r"(?:(?P<shell>(?:ba|z|da|k|fi)?sh\b)|(?P<interp>python[0-9.]*+|perl|ruby|node|php)(?![\w.]))(?P<rest>(?:'[^']*'|\"[^\"]*\"|\d*>&(?:\d+|-)|&>>?|[^|;&\n'\"])*)")
 SUBST_FETCH_RE = _rx(r"\b(?:(?:ba|z|da|k)?sh|python[0-9.]*|perl|ruby|node|source|eval)\b[^|;\n]*?(?:<\(|\$\(|`)\s*(?:curl|wget)\b")
 # Case-sensitive: `python3 -E` / `perl -M...` are not the safe forms. Safe = print the version, pretty-print
 # JSON, or a quoted one-liner that only reads stdin as data (no exec/eval/system/import machinery).
@@ -453,8 +487,9 @@ def _pipe_to_shell(call: ToolCall) -> bool:
         if m.group("shell"):
             return True
         rest = m.group("rest")
-        # Literal output paths do not turn a JSON formatter into downloaded-code execution.
-        rest = re.sub(r"(?:\s+\d*>>?\s*(?:[^\s'\"<>$`()]+|'[^'$`]*'|\"[^\"$`]*\"))+$", "", rest)
+        # Literal output paths (`> out.json`, `&> log`) and fd duplication (`2>&1`) do not turn a JSON
+        # formatter into downloaded-code execution.
+        rest = re.sub(r"(?:\s+(?:\d*>&(?:\d+|-)|(?:\d*|&)>>?\s*(?:[^\s'\"<>$`()&]+|'[^'$`]*'|\"[^\"$`]*\")))+\s*$", "", rest)
         safe = SAFE_INTERP_RE.match(rest)
         if not safe or (safe.group("code") is not None and UNSAFE_CODE_RE.search(safe.group("code"))):
             return True
@@ -528,7 +563,7 @@ RULES: list[Rule] = [
     Rule("write_system_or_auth", FILES, "block", "Writes to a system or SSH authorization file.",
          predicate=lambda c: bool(re.search(r"^/etc/|/\.ssh/authorized_keys$|^/System/|^/usr/", c.path))),
     Rule("write_shell_or_ci", FILES, "ask", "Changes shell startup, CI workflow, or git hooks.",
-         predicate=lambda c: bool(re.search(r"/\.(?:zshrc|bashrc|zprofile|bash_profile|profile)$|/\.github/workflows/|/\.git/hooks/|/\.claude/settings", c.path))),
+         predicate=lambda c: bool(re.search(r"/\.(?:zshrc|bashrc|zprofile|bash_profile|profile)$|/\.github/workflows/|/\.git/hooks/|/\.claude/settings", c.path, re.I))),
     Rule("write_outside_project", FILES, "ask", "Writes a file outside the project directory.", predicate=_outside_cwd),
     Rule("fetch_with_secret", ("WebFetch",), "block", "URL contains a secret.", predicate=_url_has_secret),
 ]

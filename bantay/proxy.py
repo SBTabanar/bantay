@@ -210,7 +210,9 @@ def attach_redact_routes(app: FastAPI):
                 except Exception as e:   # fail closed: never forward content we failed to redact
                     bus.publish({"type": "error", "where": "proxy-redact", "error": type(e).__name__})
                     return _err(500, "redaction failed; request not forwarded")
-                if n:
+                # count_tokens carries the same conversation as the /messages call that follows, so it is
+                # redacted silently: only /messages feeds the dashboard and the redaction counters.
+                if n and is_messages:
                     bus.stats["redactions"] += 1; _update_counts()
                     msgs = body.get("messages") or []
                     red_texts = [t for m in msgs if isinstance(m, dict) for t in _texts(m.get("content"))]

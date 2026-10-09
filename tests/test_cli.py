@@ -32,3 +32,28 @@ def test_default_adapter_prefers_env_then_bundled(monkeypatch, tmp_path):
     assert cli.default_adapter() == "/elsewhere/lora"
     monkeypatch.setenv("BANTAY_ADAPTER", "none")
     assert cli.default_adapter() is None
+
+def test_merge_updates_stale_bantay_group_in_place():
+    from bantay.cli import MATCHER
+    cur = hook_settings()["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    old = {"hooks": {"PreToolUse": [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook claude"}]},
+        {"matcher": "Bash|Write", "hooks": [{"type": "command", "command": "/old/venv/bin/bantay-hook", "timeout": 5}]},
+    ]}}
+    merged = merge_settings(old, hook_settings())
+    groups = merged["hooks"]["PreToolUse"]
+    mine = [g for g in groups if any("bantay-hook" in h["command"] for h in g["hooks"])]
+    assert len(groups) == 2 and len(mine) == 1
+    assert mine[0]["matcher"] == MATCHER and mine[0]["hooks"] == [{"type": "command", "command": cur, "timeout": 20}]
+    assert groups[0] == old["hooks"]["PreToolUse"][0]  # unrelated hooks untouched
+    assert merge_settings(merged, hook_settings()) == merged  # idempotent
+
+def test_merge_moves_bantay_out_of_a_shared_group():
+    from bantay.cli import MATCHER
+    old = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "rtk hook claude"}, {"type": "command", "command": "bantay-hook", "timeout": 5}]}]}}
+    merged = merge_settings(old, hook_settings())
+    groups = merged["hooks"]["PreToolUse"]
+    assert groups[0] == {"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook claude"}]}
+    assert len(groups) == 2 and groups[1]["matcher"] == MATCHER
+    assert merge_settings(merged, hook_settings()) == merged

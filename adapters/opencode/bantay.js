@@ -10,8 +10,8 @@ const DEFAULT_URL = "http://127.0.0.1:4477";
 const TIMEOUT_MS = 15000;
 const RANK = { allow: 0, ask: 1, block: 2 };
 // The plugin file itself, and the dirs OpenCode auto-loads plugins from.
-const SELF_RE = /(?:^|\/)(?:\.opencode|\.config\/opencode)\/plugins?\//;
-const SELF_BASH_RE = /\b(?:rm|mv|cp|unlink|truncate|shred|tee|ln|chmod)\b[^;&|\n]*(?:\.opencode|\.config\/opencode)\/plugins?\b|\bsed\b[^;&|\n]*\s-i[^;&|\n]*\.opencode\/plugins?\b|>\s*["']?\S*\.opencode\/plugins?\//;
+const SELF_RE = /(?:^|\/)(?:\.opencode|\.config\/opencode)\/plugins?\//i;
+const SELF_BASH_RE = /\b(?:rm|mv|cp|unlink|truncate|shred|tee|ln|chmod)\b[^;&|\n]*(?:\.opencode|\.config\/opencode)\/plugins?\b|\bsed\b[^;&|\n]*\s-i[^;&|\n]*\.opencode\/plugins?\b|>\s*["']?\S*\.opencode\/plugins?\//i;
 
 function parsePatch(text) {
   // apply_patch envelope: "*** Add File: p" / "*** Update File: p" / "*** Delete File: p"
@@ -39,13 +39,14 @@ function translate(tool, args) {
     case "edit": return [{ tool_name: "Edit", tool_input: { file_path: a.filePath ?? "", old_string: a.oldString ?? "", new_string: a.newString ?? "" } }];
     case "grep": return [{ tool_name: "Grep", tool_input: { pattern: a.pattern ?? "", path: a.path ?? "", include: a.include ?? "" } }];
     case "glob": return [{ tool_name: "Glob", tool_input: { pattern: a.pattern ?? "", path: a.path ?? "" } }];
+    case "list": return [{ tool_name: "LS", tool_input: { path: a.path ?? "" } }];
     case "webfetch": return [{ tool_name: "WebFetch", tool_input: { url: a.url ?? "" } }];
     case "apply_patch":
       return parsePatch(a.patchText).length ? parsePatch(a.patchText).map((f) =>
         f.op === "Delete" ? { tool_name: "Bash", tool_input: { command: `rm -- ${JSON.stringify(f.path)}` } }
         : f.op === "Add" ? { tool_name: "Write", tool_input: { file_path: f.path, content: f.plus.join("\n") } }
         : { tool_name: "Edit", tool_input: { file_path: f.path, old_string: f.minus.join("\n"), new_string: f.plus.join("\n") } }) : [{ tool_name: tool, tool_input: a }];
-    case "todowrite": case "question": case "invalid": return [];
+    case "todowrite": case "todoread": case "question": case "invalid": return [];
     default: return [{ tool_name: tool, tool_input: a }];
   }
 }
@@ -74,8 +75,9 @@ async function decide(payload, url = process.env.BANTAY_URL || DEFAULT_URL) {
 function message(d) {
   if (d.unreachable) return "[bantay] daemon unreachable — run bantay serve";
   const rule = d.rule ? ` (rule: ${d.rule})` : "";
-  if (d.verdict === "ask") return `[bantay] ask: needs human approval, refused in OpenCode — ${d.reason}${rule}`;
-  return `[bantay] ${d.reason}${rule}`;
+  const reason = typeof d.reason === "string" && d.reason.trim() ? d.reason : "(no reason given)";
+  if (d.verdict === "ask") return `[bantay] ask: needs human approval, refused in OpenCode — ${reason}${rule}`;
+  return `[bantay] ${reason}${rule}`;
 }
 
 // Judge one OpenCode tool call. Resolves on allow, throws Error("[bantay] ...") otherwise.

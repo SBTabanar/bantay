@@ -144,6 +144,14 @@ def test_count_tokens_redacts_request_but_preserves_response(monkeypatch):
     assert seen["url"].endswith("/v1/messages/count_tokens?beta=true") and seen["ae"] == "identity"
     assert resp.content == b'{"echo":"<EMAIL_1> a@b.com"}' and resp.headers["x-upstream"] == "1"
 
+def test_count_tokens_redacts_silently(monkeypatch):
+    async def up(request):
+        return httpx.Response(200, headers={"content-type": "application/json"}, content=b'{"input_tokens":3}')
+    c, _ = _app_with(monkeypatch, up)
+    c.post("/anthropic/v1/messages/count_tokens", json={"messages": [{"role": "user", "content": "mail juan@x.ph"}]})
+    assert not [e for e in c.app.state.bus.history if e["type"] == "redact"]
+    assert c.get("/stats").json()["redactions"] == 0
+
 def test_non_stream_messages_response_restored_and_query_kept(monkeypatch):
     seen = {}
     async def up(request):

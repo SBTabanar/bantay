@@ -188,3 +188,49 @@ def test_review_round_four_routine_literals(bash, command):
 def test_review_round_four_preserves_dangerous_blocks(bash, command):
     d = evaluate(bash(command))
     assert d and d.verdict == 'block'
+
+
+# --- review fix wave: heredoc commit messages, redirects, case-folded guards ---
+
+def _heredoc_commit(body, delim="'EOF'", flag="-m"):
+    d = delim.strip("'\"")
+    return f'git commit {flag} "$(cat <<{delim}\n{body}\n{d}\n)"'
+
+@pytest.mark.parametrize('command', [
+    _heredoc_commit("fix shutdown handler\n\nThe old handler ignored SIGTERM."),
+    _heredoc_commit("fix shutdown handler", delim='"EOF"'),
+    _heredoc_commit("handle reboot and halt\n\ndocument DROP TABLE risk"),
+    _heredoc_commit("fix shutdown handler", flag="-am"),
+    _heredoc_commit("fix shutdown handler", flag="-a -m"),
+    'git commit -am "fix shutdown handler"', 'git commit -a -m "fix shutdown handler"',
+    "curl -s https://api/x | python3 -m json.tool 2>&1",
+    "curl -s https://api/x | python3 -m json.tool &> out.json",
+    "curl -s https://api/x | python3 -m json.tool > out.json 2>&1",
+])
+def test_review_wave_routine_literals(bash, command):
+    assert evaluate(bash(command)) is None, command
+
+@pytest.mark.parametrize('command', [
+    _heredoc_commit("msg $(rm -rf ~)"),                   # substitution in the body: not collapsed
+    _heredoc_commit("msg\n$(rm -rf ~)", delim="EOF"),      # unquoted delimiter: the shell expands the body
+    _heredoc_commit("msg\nEOF\nrm -rf ~"),                # an early delimiter line ends the heredoc
+    _heredoc_commit("ok") + " && rm -rf ~",
+    "curl x | python3 -m json.tool 2>&1 & rm -rf ~",
+    "curl x | python3 2>&1",
+])
+def test_review_wave_dangerous_still_blocked(bash, command):
+    d = evaluate(bash(command))
+    assert d and d.verdict == "block", (command, d)
+
+@pytest.mark.parametrize('command', [
+    'cd .OpenCode/Plugin && rm bantay.js', 'cd .OPENCODE && rm Plugin/bantay.js',
+    'cd .Claude && rm Settings.json', 'cd ~/.Claude/Hooks && rm pre.sh', 'rm .Claude/settings.json',
+])
+def test_case_folded_guard_bash(bash, command):
+    d = evaluate(bash(command))
+    assert d and d.rule == "guardrail_tamper" and d.verdict == "block", (command, d)
+
+@pytest.mark.parametrize('path', ['/p/.Claude/settings.json', '/p/.claude/Settings.Local.json', '.CLAUDE/hooks/x.sh'])
+def test_case_folded_guard_file_tools(path):
+    d = evaluate(ToolCall("Write", {"file_path": path, "content": "{}"}, cwd="/p"))
+    assert d and d.rule == "guardrail_tamper" and d.verdict == "block", (path, d)

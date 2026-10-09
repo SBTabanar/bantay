@@ -28,3 +28,17 @@ test('unreachable daemon refuses unknown tools', async () => {
   globalThis.fetch = async () => { throw new Error('offline'); };
   await assert.rejects(plugin.guard('custom', {}), /daemon unreachable/);
 });
+test('list maps to LS and todoread is not judged', () => {
+  assert.deepEqual(plugin.translate('list', {path: 'src'}), [{tool_name: 'LS', tool_input: {path: 'src'}}]);
+  assert.deepEqual(plugin.translate('todoread', {}), []);
+  assert.equal(plugin.translate('task', {prompt: 'x'})[0].tool_name, 'task');
+  assert.equal(plugin.translate('skill', {name: 'x'})[0].tool_name, 'skill');
+});
+test('a block without a reason still explains itself', async () => {
+  globalThis.fetch = async () => ({ok: true, json: async () => ({verdict: 'block'})});
+  await assert.rejects(plugin.guard('bash', {command: 'x'}), (e) => !/undefined/.test(e.message) && /no reason given/.test(e.message));
+});
+test('plugin paths are matched case-insensitively', async () => {
+  globalThis.fetch = async () => { throw new Error('daemon must not be asked'); };
+  await assert.rejects(plugin.guard('write', {filePath: '.OpenCode/Plugin/bantay.js', content: ''}), /Disables the Bantay/);
+});

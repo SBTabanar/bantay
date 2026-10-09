@@ -10,12 +10,34 @@ def hook_cmd() -> str:
 def hook_settings() -> dict:
     return {"hooks": {"PreToolUse": [{"matcher": MATCHER, "hooks": [{"type": "command", "command": hook_cmd(), "timeout": 20}]}]}}
 
+def _is_bantay_hook(h: dict, command: str) -> bool:
+    cmd = str(h.get("command", ""))
+    return cmd == command or os.path.basename(cmd.split(" ")[0]) == "bantay-hook"
+
 def merge_settings(existing: dict, add: dict) -> dict:
+    """Add the Bantay PreToolUse group, or bring an earlier install up to date (matcher, command,
+    timeout) in place. Other hooks are kept; re-running is idempotent."""
     out = json.loads(json.dumps(existing or {}))
     groups = out.setdefault("hooks", {}).setdefault("PreToolUse", [])
     for g in add["hooks"]["PreToolUse"]:
-        if not any(h.get("command") == g["hooks"][0]["command"] for grp in groups for h in grp.get("hooks", [])):
-            groups.append(g)
+        want = g["hooks"][0]
+        found = False
+        for grp in list(groups):
+            hooks = grp.get("hooks", [])
+            mine = [h for h in hooks if isinstance(h, dict) and _is_bantay_hook(h, want["command"])]
+            if not mine:
+                continue
+            if found or len(mine) != len(hooks):
+                # a duplicate, or bantay sharing a group with other hooks: drop it here, keep the rest
+                grp["hooks"] = [h for h in hooks if h not in mine]
+                if not grp["hooks"]:
+                    groups.remove(grp)
+                continue
+            grp["matcher"] = g["matcher"]
+            grp["hooks"] = [dict(mine[0], **want)]
+            found = True
+        if not found:
+            groups.append(json.loads(json.dumps(g)))
     return out
 
 OPENCODE_PLUGIN = Path(__file__).resolve().parent.parent / "adapters" / "opencode" / "bantay.js"
