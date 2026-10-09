@@ -1,0 +1,26 @@
+[project]
+name = "bantay"
+version = "0.1.0"
+description = "Local AI guardrail for cloud coding agents"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "mlx-lm>=0.32",
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "httpx>=0.27",
+]
+[project.optional-dependencies]
+pii = ["gliner>=0.2.13", "torch>=2.4"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+[project.scripts]
+bantay = "bantay.cli:main"
+bantay-hook = "bantay.hook:main"
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+include = ["bantay*"]
+[tool.setuptools.package-data]
+bantay = ["static/*.html"]
+[tool.pytest.ini_options]
+markers = ["slow: needs the real model"]
