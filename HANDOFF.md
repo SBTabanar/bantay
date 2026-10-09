@@ -4,7 +4,7 @@ AppBuilders PH deadline: **2026-10-10 10:00 PHT**. Owner: Sergei Benjamin Tabana
 
 ## Current checkpoint
 
-Codex resumed Claude's checkpoint at Sergei's request on 2026-10-09. Work is sequential; no subagents or older Claude workers remain active. LoRA training is complete. Final rules fixes are committed at `3b7b56a`; benchmark/documentation and release preparation follow. No duplicate training is needed.
+Codex resumed Claude's checkpoint at Sergei's request on 2026-10-09. Work is sequential; no subagents or older Claude workers remain active. LoRA training is complete. Final rules fixes are committed at `3b7b56a`; final benchmark/documentation at `544f0c1`. Release is complete on `main`. No duplicate training is needed.
 
 ## Completed
 
@@ -27,7 +27,11 @@ Verification: **589 Python tests and 8 OpenCode tests pass**; shell syntax and w
 
 ## Release status
 
-Final checks and public GitHub release are being completed. Intended repo: https://github.com/sbtabanar/bantay. GitHub authentication works; repo did not exist at resume. Merge `build` to `main`, create public repo and push after checks. No video, social post, or submission form has been published.
+**Published:** https://github.com/SBTabanar/bantay (PUBLIC, default branch `main`, verified through GitHub API). `build` was fast-forwarded into `main` and pushed. All implementation, review, benchmark and repository release work is done.
+
+GitHub flagged 12 synthetic credential-shaped values in the generated data and redaction fixture. Their provenance was verified against generation commits and task reports, then each finding was marked `used_in_tests` via GitHub’s per-finding mechanism, following the latest Claude checkpoint instruction. Repository-wide protection was not disabled, and exact dataset hashes were preserved.
+
+No daemon or trainer is left running by this session. No video, social post, or submission form has been published.
 
 ## Remaining presenter work
 

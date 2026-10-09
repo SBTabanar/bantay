@@ -22,7 +22,7 @@ Sergei Benjamin Tabanar (solo)
 
 https://github.com/sbtabanar/bantay
 
-<!-- Confirm the repo is public and the build branch is merged to main before submitting. -->
+Public repository verified on 2026-10-09; tested build merged into default branch `main`.
 
 ## Demo video (1 minute)
 
