@@ -18,9 +18,16 @@ def test_model_decides_the_rest(bash):
     assert d.verdict == "ask" and d.source == "model" and d.reason == "touches prod" and d.probs["ask"] == 0.8
 
 def test_block_floor_escalates_to_ask(bash):
-    fc = FakeClassifier("allow", probs={"allow": 0.5, "ask": 0.1, "block": 0.4})
+    fc = FakeClassifier("allow", probs={"allow": 0.3, "ask": 0.1, "block": 0.6})
     d = Engine(fc).decide(bash("python cleanup.py --all"))
     assert d.verdict == "ask" and "uncertain" in d.reason
+
+def test_block_floor_lets_moderate_block_prob_through(bash):
+    # Rehearsal: harmless chained cat / git rm / sed scored block~0.43 and escalated allow->ask.
+    fc = FakeClassifier("allow", probs={"allow": 0.5, "ask": 0.07, "block": 0.43})
+    d = Engine(fc).decide(bash("python cleanup.py --all"))
+    assert Engine().block_floor == 0.5
+    assert d.verdict == "allow" and d.source == "model"
 
 def test_no_classifier_means_ask(bash):
     d = Engine(None).decide(bash("python x.py"))

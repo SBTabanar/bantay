@@ -83,7 +83,7 @@ def routine_git(command: str) -> bool:
     return False
 
 class Engine:
-    def __init__(self, classifier=None, block_floor: float = 0.35):
+    def __init__(self, classifier=None, block_floor: float = 0.5):
         self.classifier, self.block_floor = classifier, block_floor
 
     @property

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bantay demo launcher. Idempotent: safe to run again at any point.
-#   demo/run.sh            start bantayd (if down), warm the model, open the dashboard, prepare the sample repo
+#   demo/run.sh            start bantayd (if down), warm the model and redactor, open the dashboard, prepare the sample repo
 #   demo/run.sh --reset    also restore demo/sample-project to the outer repo's HEAD (discarding demo edits)
 #                          and recreate its own git history and local origin
 #   demo/run.sh --restart  stop the bantayd this script started (zeroes dashboard counters), then start fresh
@@ -85,6 +85,18 @@ else
   # It shows as the first row in the dashboard feed: `$ touch .bantay-warmup`.
   curl --max-time 30 -s -o /dev/null -X POST "$URL/decide" -H 'Content-Type: application/json' \
     -d "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"touch .bantay-warmup\"},\"cwd\":\"$SAMPLE\"}" || true
+  # Warm-up 2: one redaction, so GLiNER and the redactor are loaded before the first proxied request
+  # (cold, the first proxied request costs ~6 s). It fills the "Last redaction" panel with the warm-up text
+  # and starts the redacted counter at 3. Both warm-ups run before the dashboard opens.
+  if [[ "$FLAGS" != *--no-redact* ]]; then
+    say "warming the redactor (GLiNER) via /redact"
+    if RT="$(curl -s -o /dev/null -w '%{http_code} %{time_total}' --max-time 60 -X POST "$URL/redact" \
+        -H 'content-type: application/json' -d '{"text":"warm-up Maria Santos 0917-000-0000 a@b.com"}')"; then
+      echo "    /redact warm-up: HTTP ${RT%% *} in ${RT#* } s"
+    else
+      echo "warning: /redact warm-up did not complete within 60 s (HTTP ${RT%% *}); see $LOG" >&2
+    fi
+  fi
   say "bantayd up and warm: $(curl -s "$URL/health")  (pid $(cat "$PIDFILE"), log $LOG)"
 fi
 

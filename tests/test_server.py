@@ -23,6 +23,12 @@ def test_health_and_dashboard():
     assert c.get("/health").json()["ok"] is True
     assert "Bantay" in c.get("/").text
 
+def test_dashboard_hides_original_redaction_text_by_default():
+    html = client().get("/").text
+    assert 'id="orig-toggle"' in html and 'aria-pressed="false"' in html and "show original" in html
+    assert '<div id="r-orig-box" hidden>' in html
+    assert "localStorage" in html and "try {" in html
+
 def test_events_stream_receives_decision():
     # Starlette's TestClient buffers the whole body, so an endless SSE stream needs a real server.
     import socket, threading, time, httpx, uvicorn

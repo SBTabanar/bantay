@@ -51,14 +51,23 @@
   .v.ask { color: var(--ask); background: rgba(210,153,34,.14); border: 1px solid rgba(210,153,34,.4); }
   .v.block { color: var(--block); background: rgba(248,81,73,.14); border: 1px solid rgba(248,81,73,.4); }
   .empty { color: var(--muted); padding: 20px 16px; }
-  .redact { display: grid; grid-template-columns: 1fr 1fr; }
+  .redact { display: grid; grid-template-columns: 1fr; }
+  .redact.with-orig { grid-template-columns: 1fr 1fr; }
   .redact > div { padding: 14px 16px; min-width: 0; }
   .redact > div + div { border-left: 1px solid var(--line); }
+  .redact [hidden] { display: none; }
+  .sec-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 0 16px 0 0; border-bottom: 1px solid var(--line); }
+  .sec-head h2 { border-bottom: 0; }
+  .toggle { font: inherit; font-size: 12px; color: var(--muted); background: transparent; border: 1px solid var(--line);
+    border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+  .toggle[aria-pressed="true"] { color: var(--text); border-color: var(--muted); }
+  .counts { color: var(--muted); font-size: 13px; margin-top: 10px; }
   .redact .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
   .redact pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; font-size: 14px; max-height: 180px; overflow: auto; }
   .ph { color: var(--allow); background: rgba(63,185,80,.14); border-radius: 4px; padding: 0 3px; }
   @media (max-width: 900px) { .counters { grid-template-columns: repeat(2, 1fr); } .card.zero { grid-column: span 2; }
-    .redact { grid-template-columns: 1fr; } .redact > div + div { border-left: 0; border-top: 1px solid var(--line); } }
+    .redact, .redact.with-orig { grid-template-columns: 1fr; } .redact > div + div { border-left: 0; border-top: 1px solid var(--line); } }
 </style>
 </head>
 <body>
@@ -89,11 +98,15 @@
         <div class="empty" id="empty">Waiting for the agent's first tool call.</div>
       </div>
     </section>
-    <section>
-      <h2>Last redaction</h2>
-      <div class="redact">
-        <div><div class="k">Original</div><pre id="r-orig">No redactions yet.</pre></div>
-        <div><div class="k">What left the machine</div><pre id="r-red">No redactions yet.</pre></div>
+    <section aria-labelledby="redact-h">
+      <div class="sec-head">
+        <h2 id="redact-h">Last redaction</h2>
+        <button type="button" class="toggle" id="orig-toggle" aria-pressed="false" aria-controls="r-orig-box">show original</button>
+      </div>
+      <div class="redact" id="redact">
+        <div id="r-orig-box" hidden><div class="k">Original (local only)</div><pre id="r-orig"></pre></div>
+        <div><div class="k">What left the machine</div><pre id="r-red">No redactions yet.</pre>
+          <p class="counts" id="r-counts"></p></div>
       </div>
     </section>
   </div>
@@ -135,10 +148,43 @@ function addRow(ev, animate) {
   $("empty").style.display = "none";
 }
 
-function renderRedact(ev) {
-  $("r-orig").textContent = ev.original ?? "";
-  $("r-red").innerHTML = esc(ev.redacted ?? "").replace(/&lt;([A-Z][A-Z_]*_\d+)&gt;/g, '<span class="ph">&lt;$1&gt;</span>');
+// The original text can hold the presenter's own email and git name (from the agent's context),
+// so it stays in memory and is only written to the page while "show original" is on.
+const ORIG_KEY = "bantay.showOriginal";
+let showOriginal = false, lastOriginal = "";
+try { showOriginal = localStorage.getItem(ORIG_KEY) === "1"; } catch (e) {}
+
+function applyOriginal() {
+  $("orig-toggle").setAttribute("aria-pressed", String(showOriginal));
+  $("orig-toggle").textContent = showOriginal ? "hide original" : "show original";
+  $("r-orig-box").hidden = !showOriginal;
+  $("redact").classList.toggle("with-orig", showOriginal);
+  $("r-orig").textContent = showOriginal ? (lastOriginal || "No redactions yet.") : "";
 }
+$("orig-toggle").addEventListener("click", () => {
+  showOriginal = !showOriginal;
+  try { localStorage.setItem(ORIG_KEY, showOriginal ? "1" : "0"); } catch (e) {}
+  applyOriginal();
+});
+
+const PH_RE = /<([A-Z][A-Z_]*)_\d+>/g;
+function redactCounts(ev) {
+  if (ev.counts && typeof ev.counts === "object") return ev.counts;
+  const names = Array.isArray(ev.placeholder_names) && ev.placeholder_names.length
+    ? ev.placeholder_names : (String(ev.redacted ?? "").match(PH_RE) || []);
+  const c = {};
+  for (const n of new Set(names)) { const m = /^<([A-Z][A-Z_]*)_\d+>$/.exec(n); if (m) c[m[1]] = (c[m[1]] || 0) + 1; }
+  return c;
+}
+
+function renderRedact(ev) {
+  lastOriginal = ev.original ?? "";
+  $("r-red").innerHTML = esc(ev.redacted ?? "").replace(/&lt;([A-Z][A-Z_]*_\d+)&gt;/g, '<span class="ph">&lt;$1&gt;</span>');
+  const parts = Object.entries(redactCounts(ev)).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`);
+  $("r-counts").textContent = parts.length ? `redacted: ${parts.join(" · ")}` : "";
+  applyOriginal();
+}
+applyOriginal();
 
 function connect() {
   const es = new EventSource("/events");
