@@ -92,8 +92,8 @@
     <section>
       <h2>Last redaction</h2>
       <div class="redact">
-        <div><div class="k">Original</div><pre id="r-orig">—</pre></div>
-        <div><div class="k">What left the machine</div><pre id="r-red">—</pre></div>
+        <div><div class="k">Original</div><pre id="r-orig">No redactions yet.</pre></div>
+        <div><div class="k">What left the machine</div><pre id="r-red">No redactions yet.</pre></div>
       </div>
     </section>
   </div>
@@ -113,7 +113,7 @@ function renderStats(s) {
   $("c-redacted").textContent = (s.secrets_redacted ?? 0) + (s.pii_redacted ?? 0);
   $("c-cloud").textContent = s.bytes_to_cloud_for_decisions ?? 0;
   if (s.decisions && s.latency_ms_sum != null)
-    $("c-latency").textContent = `avg ${(s.latency_ms_sum / s.decisions).toFixed(1)} ms per verdict, on this machine`;
+    $("c-latency").textContent = `avg ${(s.latency_ms_sum / s.decisions).toFixed(0)} ms per verdict · on-device`;
   if (s.model) $("status").textContent = `${s.model} · MLX · 127.0.0.1 only`;
 }
 
