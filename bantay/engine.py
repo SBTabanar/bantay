@@ -27,8 +27,14 @@ _EXACT = (
 # git accepts any unique prefix of a long option, so --output is matched from --ou on.
 _OPTION_EXEC = (
     r"(?!.*(?:--pre\b|--upload-pack|--receive-pack|--exec\b|--ou(?:t(?:p(?:u(?:t)?)?)?)?(?=[= \t]|\Z)"
-    r"|(?:^|[ \t])-c[ \t]*[\w.-]+=))"
+    r"|(?:^|[ \t])-c[ \t]*[\w.-]+="
+    # The shell strips quotes and backslashes before the tool runs (--p''re, --"pre", --pr\e, '--pre'),
+    # so any option-looking token (optionally after leading quotes) that contains one is rejected.
+    r"|(?:^|[ \t])['\"\\]*-[^ \t]*['\"\\]))"
 )
+# Policy: the allowlist covers routine dev commands that may run project code by design (npm test,
+# make, pytest, cargo build). It is a latency shortcut for commands a developer would run without
+# thinking, not a sandbox, and the rules layer still runs first on every command.
 ALLOWLIST_RE = re.compile(r"^[ \t]*" + _OPTION_EXEC + r"(?:" + _WITH_ARGS + r"|" + _EXACT + r")\Z")
 
 class Engine:

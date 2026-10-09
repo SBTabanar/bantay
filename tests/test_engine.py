@@ -82,13 +82,17 @@ def test_bypass_probes_reach_the_model(bash):
     for cmd in ["echo\nnode x", "ls\nnode exfil.js", "ls\n",
                 'git fetch --upload="sh -c id" .', 'git fetch --upl="sh -c id" .', "git fetch origin",
                 'git fetch-pack --exec="sh -c id" .', "npm run build-and-deploy", "make build-and-push",
-                "tree -o /tmp/x", "git diff --out=/tmp/x"]:
+                "tree -o /tmp/x", "git diff --out=/tmp/x",
+                "rg --p''re=sh foo", 'rg --"pre"=sh foo', "rg --pr\\e sh foo", "rg '--pre=sh' foo",
+                'git log --"output"=/tmp/x', "git log --out''put=/tmp/x", "git diff --o\\utput=/tmp/x",
+                'git log "--output=/tmp/x"']:
         fc, call = FakeClassifier("block"), bash(cmd)
         d = Engine(fc).decide(call)
         assert d.source == "model" and fc.calls == [call], (cmd, d)
 
 def test_allowlist_routine_after_round_2(bash):
-    for cmd in ["git status", "npm run build", "make test", "ls -la", "git log --oneline -5", "npm test"]:
+    for cmd in ["git status", "npm run build", "make test", "ls -la", "git log --oneline -5", "npm test",
+                'pytest -k "x or y"', "grep -r --include=*.py foo .", 'rg -n "foo bar" src']:
         fc = FakeClassifier("block")
         d = Engine(fc).decide(bash(cmd))
         assert d.source == "allowlist" and fc.calls == [], (cmd, d)
