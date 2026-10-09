@@ -18,7 +18,17 @@ def merge_settings(existing: dict, add: dict) -> dict:
             groups.append(g)
     return out
 
+OPENCODE_PLUGIN = Path(__file__).resolve().parent.parent / "adapters" / "opencode" / "bantay.js"
+
+def install_opencode(project: str | None, src: Path = OPENCODE_PLUGIN) -> Path:
+    target = Path(project or os.getcwd()).expanduser() / ".opencode" / "plugin" / "bantay.js"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, target)
+    return target
+
 def cmd_install(a):
+    if a.opencode:
+        print(f"installed Bantay OpenCode plugin into {install_opencode(a.project)}"); return
     target = Path(a.project).expanduser() / ".claude" / "settings.json" if a.project else Path.home() / ".claude" / "settings.json"
     existing = json.loads(target.read_text()) if target.exists() else {}
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -67,7 +77,7 @@ def main(argv=None):
     s = sub.add_parser("serve"); common(s); s.add_argument("--port", type=int, default=4477)
     s.add_argument("--no-redact", action="store_true"); s.add_argument("--upstream", default="https://api.anthropic.com"); s.set_defaults(fn=cmd_serve)
     c = sub.add_parser("check"); common(c); c.add_argument("text"); c.add_argument("--tool", default="Bash"); c.set_defaults(fn=cmd_check)
-    i = sub.add_parser("install"); i.add_argument("--project"); i.set_defaults(fn=cmd_install)
+    i = sub.add_parser("install"); i.add_argument("--project"); i.add_argument("--opencode", action="store_true"); i.set_defaults(fn=cmd_install)
     r = sub.add_parser("redact"); r.add_argument("text"); r.add_argument("--no-gliner", action="store_true"); r.set_defaults(fn=cmd_redact)
     b = sub.add_parser("bench"); common(b); b.add_argument("--heldout", default="data/heldout.jsonl"); b.add_argument("--out", default="BENCHMARKS.md")
     b.add_argument("--base-only", action="store_true"); b.set_defaults(fn=lambda a: __import__("bantay.bench", fromlist=["run"]).run(a))

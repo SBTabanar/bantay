@@ -13,3 +13,10 @@ def test_merge_keeps_existing_hooks():
     cmds = [h["command"] for g in merged["hooks"]["PreToolUse"] for h in g["hooks"]]
     assert "rtk hook claude" in cmds and any(c.endswith("bantay-hook") for c in cmds) and merged["model"] == "x"
     assert merge_settings(merged, hook_settings()) == merged  # idempotent
+
+def test_install_opencode_places_plugin(tmp_path):
+    from bantay.cli import main, OPENCODE_PLUGIN
+    assert main(["install", "--opencode", "--project", str(tmp_path)]) == 0
+    placed = tmp_path / ".opencode" / "plugin" / "bantay.js"
+    assert placed.read_text() == OPENCODE_PLUGIN.read_text() and "tool.execute.before" in placed.read_text()
+    assert not (tmp_path / ".claude").exists()  # Claude Code settings untouched
