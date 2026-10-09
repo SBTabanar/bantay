@@ -59,8 +59,8 @@ ledger may disagree with machine time; trust actual commits, files, and live pro
   bounds. Astra reported 212 targeted rules/engine tests and 4 OpenCode JS tests passed. These results
   are scoped; full suite/final review has not run after this wave. Do not mark T1–2/OpenCode closed yet.
 - T10 trainer PID **50433** (parent shell 50429) is deliberately still running. Last observed iteration
-  **180/800**, train loss 1.374. Iteration-100 validation loss 1.661 (initial 3.989).
-  `adapters/bantay-lora/0000100_adapters.safetensors` and `adapters.safetensors` exist (~10 MB each).
+  **320/800**, train loss 1.212. Iteration-300 validation loss 1.311 (initial 3.989).
+  `adapters/bantay-lora/0000300_adapters.safetensors` and `adapters.safetensors` exist (~10 MB each).
   They are interim checkpoints, not validated final release weights. Logs: `adapters/bantay-lora/train.log`.
   The redundant smoke trainer 51929 and stale pytest 29211 were terminated; old daemons are gone.
   Initial contention made training slow; recent output was 11–14 supervised tokens/s. Do not launch
