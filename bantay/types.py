@@ -25,7 +25,8 @@ class ToolCall:
 
     @property
     def path(self) -> str:
-        return str(self.tool_input.get("file_path", "") or self.tool_input.get("path", "") or "")
+        return str(self.tool_input.get("file_path", "") or self.tool_input.get("path", "")
+                   or self.tool_input.get("value", "") or "")
 
     def summary(self) -> str:
         t = self.tool_name

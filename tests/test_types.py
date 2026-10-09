@@ -25,3 +25,8 @@ def test_prompt_messages_shape():
     assert "rm -rf /" in m[1]["content"] and "cwd=/p" in m[1]["content"]
     m2 = prompts.messages_for(call, label="block", reason="wipes disk")
     assert m2[2] == {"role": "assistant", "content": "block\nReason: wipes disk"}
+
+def test_coerced_input_fallbacks():
+    assert ToolCall("Bash", "ls").command == "ls"
+    r = ToolCall("Read", "/p/.env")
+    assert r.path == "/p/.env" and r.summary() == "read /p/.env"

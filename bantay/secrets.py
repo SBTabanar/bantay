@@ -16,7 +16,7 @@ SECRET_PATTERNS: dict[str, re.Pattern] = {k: re.compile(p) for k, p in {
 }.items()}
 
 SECRET_FILE_RE = re.compile(
-    r"(?:(?:^|[\s/\"'=])\.env(?!\.?(?:example|sample|template|test)\b)(?:\.[A-Za-z0-9_\-]+)?(?=$|[\s\"'|;&:)])"
+    r"(?:(?:^|[\s/\"'=])\.env(?!\.?(?:example|sample|template|test)\b)(?:\.[A-Za-z0-9_\-]+)*(?=$|[\s\"'|;&:)])"
     r"|\.pem\b|\.p12\b|\.pfx\b|\bid_(?:rsa|dsa|ecdsa|ed25519)\b|/\.ssh/|\.aws/credentials|\.netrc\b|\.npmrc\b|\.pypirc\b"
     r"|\.git-credentials\b|\.docker/config\.json|/\.kube/config|Library/Keychains|\.(?:bash|zsh)_history\b"
     r"|\.claude/\.credentials\.json|\.config/gh/hosts\.yml|/secrets?\.(?:ya?ml|json)\b|service[_\-]?account[^\s]*\.json)"
