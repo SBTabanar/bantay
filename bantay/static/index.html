@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bantay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0d10; --panel: #12161b; --line: #222a33; --text: #e6edf3; --muted: #7d8590;
+    --allow: #3fb950; --ask: #d29922; --block: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  main { max-width: 1280px; margin: 0 auto; padding: 28px 24px 48px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+  h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.01em; }
+  h1 span { color: var(--muted); font-weight: 400; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--line);
+    border-radius: 999px; color: var(--muted); font-size: 13px; background: var(--panel); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.live { background: var(--allow); box-shadow: 0 0 8px var(--allow); }
+  .dot.down { background: var(--block); }
+  .counters { display: grid; grid-template-columns: repeat(5, 1fr) 1.6fr; gap: 12px; margin-bottom: 24px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card .n { font-size: 34px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .card .l { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 6px; }
+  .card.allow .n { color: var(--allow); } .card.ask .n { color: var(--ask); } .card.block .n { color: var(--block); }
+  .card.zero { border-color: rgba(63,185,80,.55); background: linear-gradient(180deg, rgba(63,185,80,.10), var(--panel)); }
+  .card.zero .n { font-size: 48px; color: var(--allow); }
+  .card.zero .l { color: var(--text); }
+  .card.zero .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  section h2 { margin: 0; padding: 12px 16px; font-size: 13px; font-weight: 500; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid var(--line); }
+  .scroll { max-height: 46vh; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--panel); }
+  td.sum { max-width: 420px; word-break: break-all; }
+  td.reason { color: #c9d1d9; max-width: 360px; }
+  td.dim, td.ms { color: var(--muted); white-space: nowrap; } td.ms { text-align: right; }
+  tr.new { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: rgba(255,255,255,.07); } to { background: transparent; } }
+  .v { display: inline-block; min-width: 56px; text-align: center; padding: 2px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+  .v.allow { color: var(--allow); background: rgba(63,185,80,.14); border: 1px solid rgba(63,185,80,.4); }
+  .v.ask { color: var(--ask); background: rgba(210,153,34,.14); border: 1px solid rgba(210,153,34,.4); }
+  .v.block { color: var(--block); background: rgba(248,81,73,.14); border: 1px solid rgba(248,81,73,.4); }
+  .empty { color: var(--muted); padding: 20px 16px; }
+  .redact { display: grid; grid-template-columns: 1fr 1fr; }
+  .redact > div { padding: 14px 16px; min-width: 0; }
+  .redact > div + div { border-left: 1px solid var(--line); }
+  .redact .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+  .redact pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; font-size: 14px; max-height: 180px; overflow: auto; }
+  .ph { color: var(--allow); background: rgba(63,185,80,.14); border-radius: 4px; padding: 0 3px; }
+  @media (max-width: 900px) { .counters { grid-template-columns: repeat(2, 1fr); } .card.zero { grid-column: span 2; }
+    .redact { grid-template-columns: 1fr; } .redact > div + div { border-left: 0; border-top: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Bantay <span>— local judge for coding agents</span></h1>
+    <div class="pill"><i class="dot" id="dot"></i><span id="status">connecting · MLX · 127.0.0.1 only</span></div>
+  </header>
+
+  <div class="counters">
+    <div class="card"><div class="n" id="c-decisions">0</div><div class="l">Decisions</div></div>
+    <div class="card allow"><div class="n" id="c-allow">0</div><div class="l">Allowed</div></div>
+    <div class="card ask"><div class="n" id="c-ask">0</div><div class="l">Asked</div></div>
+    <div class="card block"><div class="n" id="c-block">0</div><div class="l">Blocked</div></div>
+    <div class="card"><div class="n" id="c-redacted">0</div><div class="l">Secrets/PII redacted</div></div>
+    <div class="card zero"><div class="n" id="c-cloud">0</div><div class="l">Bytes sent to cloud by the judge</div>
+      <div class="s" id="c-latency">every verdict computed on this machine</div></div>
+  </div>
+
+  <div class="grid">
+    <section>
+      <h2>Decisions</h2>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Time</th><th>Tool</th><th>Summary</th><th>Verdict</th><th>Reason</th><th>Source</th><th style="text-align:right">ms</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div class="empty" id="empty">Waiting for the agent's first tool call.</div>
+      </div>
+    </section>
+    <section>
+      <h2>Last redaction</h2>
+      <div class="redact">
+        <div><div class="k">Original</div><pre id="r-orig">—</pre></div>
+        <div><div class="k">What left the machine</div><pre id="r-red">—</pre></div>
+      </div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtTime = (ts) => new Date((ts || Date.now() / 1000) * 1000).toLocaleTimeString([], {hour12: false});
+const VERDICTS = new Set(["allow", "ask", "block"]);
+
+function renderStats(s) {
+  if (!s) return;
+  $("c-decisions").textContent = s.decisions ?? 0;
+  $("c-allow").textContent = s.allow ?? 0;
+  $("c-ask").textContent = s.ask ?? 0;
+  $("c-block").textContent = s.block ?? 0;
+  $("c-redacted").textContent = (s.secrets_redacted ?? 0) + (s.pii_redacted ?? 0);
+  $("c-cloud").textContent = s.bytes_to_cloud_for_decisions ?? 0;
+  if (s.decisions && s.latency_ms_sum != null)
+    $("c-latency").textContent = `avg ${(s.latency_ms_sum / s.decisions).toFixed(1)} ms per verdict, on this machine`;
+  if (s.model) $("status").textContent = `${s.model} · MLX · 127.0.0.1 only`;
+}
+
+async function refreshStats() {
+  try { renderStats(await (await fetch("/stats")).json()); } catch (e) {}
+}
+
+function addRow(ev, animate) {
+  const v = VERDICTS.has(ev.verdict) ? ev.verdict : "ask";
+  const tr = document.createElement("tr");
+  if (animate) tr.className = "new";
+  tr.innerHTML = `<td class="dim">${esc(fmtTime(ev.ts))}</td><td>${esc(ev.tool)}</td>` +
+    `<td class="sum">${esc(ev.summary)}</td><td><span class="v ${v}">${v}</span></td>` +
+    `<td class="reason">${esc(ev.reason)}${ev.rule ? ` <span style="color:var(--muted)">(${esc(ev.rule)})</span>` : ""}</td>` +
+    `<td class="dim">${esc(ev.source)}</td><td class="ms">${esc(ev.latency_ms ?? "")}</td>`;
+  const rows = $("rows");
+  rows.insertBefore(tr, rows.firstChild);
+  while (rows.children.length > 200) rows.removeChild(rows.lastChild);
+  $("empty").style.display = "none";
+}
+
+function renderRedact(ev) {
+  $("r-orig").textContent = ev.original ?? "";
+  $("r-red").innerHTML = esc(ev.redacted ?? "").replace(/&lt;([A-Z][A-Z_]*_\d+)&gt;/g, '<span class="ph">&lt;$1&gt;</span>');
+}
+
+function connect() {
+  const es = new EventSource("/events");
+  es.onopen = () => { $("dot").className = "dot live"; refreshStats(); };
+  es.onerror = () => { $("dot").className = "dot down"; };
+  es.onmessage = (m) => {
+    let ev; try { ev = JSON.parse(m.data); } catch (e) { return; }
+    if (ev.type === "hello") {
+      $("rows").innerHTML = "";
+      let lastRedact = null;
+      for (const h of ev.history || []) {
+        if (h.type === "decision") addRow(h, false);
+        else if (h.type === "redact") lastRedact = h;
+      }
+      if (lastRedact) renderRedact(lastRedact);
+      renderStats(ev.stats);
+      refreshStats();
+    } else if (ev.type === "decision") {
+      addRow(ev, true); refreshStats();
+    } else if (ev.type === "redact") {
+      renderRedact(ev); refreshStats();
+    }
+  };
+}
+connect();
+</script>
+</body>
+</html>
