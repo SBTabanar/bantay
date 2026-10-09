@@ -1,10 +1,9 @@
 {
   "model": "claude-haiku-5-5",
   "checked": "2026-10-09",
-  "source": "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
-  "input_usd_per_million": 0.10,
-  "output_usd_per_million": 0.50,
-  "scope": "Standard API requests with prompts up to 100000 tokens; excludes caching, thinking and CLI context overhead",
-  "assumed_input_tokens": 180,
-  "assumed_output_tokens": 2
+  "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+  "source_note": "Copied from the claude-api skill's current-models table (cached 2026-10-06), which mirrors the official pricing page above: Claude Haiku 5.5 $0.10 input / $0.50 output per million tokens for prompts up to 100K tokens ($0.50 / $2.50 beyond).",
+  "input_usd_per_million": 0.1,
+  "output_usd_per_million": 0.5,
+  "scope": "Standard API requests with prompts up to 100000 tokens. bench_cloud.py multiplies these by the mean tokens the CLI reports per call."
 }

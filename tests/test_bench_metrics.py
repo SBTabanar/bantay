@@ -40,3 +40,29 @@ def test_cloud_verdict_parse_rejects_errors():
     assert parse_label('block\nReason: unsafe') == 'block'
     with pytest.raises(ValueError):
         parse_label('API Error: usage limit')
+
+
+def _fake(acc, n=300, **extra):
+    r = {'n': n, 'accuracy': acc, 'block_recall': acc, 'false_block_rate': .01,
+         'latency_ms': {'p50': 1.0, 'p95': 2.0}, 'decisions_per_second': 10.0, 'peak_rss_mb': 100.0,
+         'sources': {'rule': 10}}
+    r.update(extra)
+    return r
+
+
+def test_render_report_has_brief_rows_and_reading_paragraph():
+    from bantay.bench import render_report
+    meta = {'measured_at': 'now', 'git_commit': 'abcdef1234', 'machine': 'M4', 'n': 300,
+            'dataset_sha256': 'x', 'model': 'm', 'adapter': 'a'}
+    full = _fake(.9, sources={'rule': 100, 'allowlist': 50, 'model': 150},
+                 latency_by_source_ms={'rule': {'n': 100, 'p50': .2, 'p95': .5},
+                                       'model_ask_block': {'n': 90, 'p50': 400.0, 'p95': 900.0}})
+    cloud = _fake(.8, n=100, model='claude-haiku-5-5', estimated_cost_per_10k_usd=.19, mean_input_tokens=600,
+                  mean_output_tokens=40, pricing_checked='d', pricing_source='u')
+    cloud.pop('peak_rss_mb')
+    md = render_report({'rules': _fake(.5, coverage=.3), 'base': _fake(.3), 'tuned': _fake(.9), 'full': full}, meta, cloud)
+    for row in ('| Rules only |', '| Base model', '| Fine-tuned model (LoRA) |',
+                '| Full engine (rules + allowlist + LoRA) |', '| Cloud: claude-haiku-5-5'):
+        assert row in md
+    assert '## Reading the table' in md and 'from 30.0% to 90.0%' in md and '$0.19 per 10,000' in md
+    assert 'n/a (remote)' in md and 'Pending' not in md

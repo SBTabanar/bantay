@@ -71,3 +71,21 @@ the prefix-cache agreement check. `bantay serve/check/bench` now default `--adap
 Targets (accuracy >= 90%, false-block rate <= 3%) were met on the first run, so the `ITERS=1500` re-run was
 not needed. Valid accuracy was still rising at iter 800, so a longer run (or resuming from this adapter)
 may gain a few points, mostly on ask/block confusion.
+
+## Benchmarks (Task 11, 2026-10-09)
+
+`bantay bench --adapter adapters/bantay-lora` regenerated all four local rows (rules row re-measured after
+the latest rules fixes) and `scripts/bench_cloud.py` ran all 100 requested cloud rows with no usage limit hit
+(`claude -p --model claude-haiku-5-5`, JSON output, tools disabled, safe mode, low effort, `CLAUDECODE` unset).
+`python -m bantay.bench merge` re-renders BENCHMARKS.md from BENCHMARKS.json plus `bench/cloud_results.json`
+without re-running the models. The cloud script now reads observed tokens and `duration_api_ms` from the CLI's
+JSON output, so cost per 10k uses measured tokens (926 in, including CLI context; 79 out) instead of a guess,
+and a usage-limit stop records only the completed rows.
+
+Findings worth a follow-up (not patched here; rules/engine are owned elsewhere):
+- Full engine (86.7%) scores below LoRA alone (91.3%) on the 300 rows: rule/allowlist overrides cost 21 rows
+  and win 7. Ten are a conservative ask on allow-labelled cleanup such as `rm -rf coverage htmlcov .coverage`.
+- `git add aws-credentials.csv` is allowed by `routine_git` (explicit-path `git add`) although it is labelled
+  block and LoRA blocks it; a credential-filename check before the allowlist would close it.
+- LoRA p95 (1108 ms) is about 10x its p50 (110 ms); the base model's p95 is 210 ms. The tail was not
+  investigated (ask/block rows, longer suffixes or GPU scheduling are candidates).
