@@ -56,8 +56,40 @@ def test_gliner_unavailable_degrades_to_regex(monkeypatch):
     out = r.redact("mail x@y.com")
     assert out.text == "mail <EMAIL_1>" and "unavailable" in r.name
 
+class _FakeNER:
+    """Stands in for GLiNER: tags given substrings as the given label."""
+    def __init__(self, tags): self.tags = tags
+    def inference(self, texts, labels, threshold=0.5, batch_size=4):
+        out = []
+        for t in texts:
+            ents = []
+            for sub, label in self.tags:
+                i = t.find(sub)
+                if i >= 0: ents.append({"start": i, "end": i + len(sub), "label": label, "text": sub})
+            out.append(ents)
+        return out
+
+def _with_fake_ner(tags):
+    r = Redactor(use_gliner=True); r._gliner = _FakeNER(tags); return r
+
+def test_regex_span_beats_overlapping_ner_span():
+    r = _with_fake_ner([("hi juan@x.ph", "person")])
+    assert r.redact("reply with exactly: hi juan@x.ph").text == "reply with exactly: hi <EMAIL_1>"
+
+def test_ner_role_words_are_not_people():
+    r = _with_fake_ner([("user", "person"), ("Juan Dela Cruz", "person")])
+    assert r.redact("The user asked Juan Dela Cruz").text == "The user asked <PERSON_1>"
+
 @pytest.mark.slow
 def test_gliner_finds_names():
     r = Redactor(use_gliner=True)
     out = r.redact("Please refund Juan Dela Cruz, he lives at 12 Mabini St, Kalibo, Aklan.")
     assert "Juan Dela Cruz" not in out.text and "<PERSON_1>" in out.text
+
+def test_reapply_respects_word_boundaries_and_large_texts_are_cached():
+    r = _with_fake_ner([("Ana", "person")])
+    r.redact("ask Ana")
+    assert r.reapply("Ana likes Banana") == "<PERSON_1> likes Banana"
+    big = "Ana " + "x" * 120_000
+    first = r.redact(big)
+    assert r.redact(big) is first
