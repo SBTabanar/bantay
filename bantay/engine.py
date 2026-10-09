@@ -1,5 +1,5 @@
 from __future__ import annotations
-import re, time
+import re, shlex, time
 from .types import ToolCall, Decision
 from . import rules
 
@@ -37,6 +37,35 @@ _OPTION_EXEC = (
 # thinking, not a sandbox, and the rules layer still runs first on every command.
 ALLOWLIST_RE = re.compile(r"^[ \t]*" + _OPTION_EXEC + r"(?:" + _WITH_ARGS + r"|" + _EXACT + r")\Z")
 
+
+def routine_git(command: str) -> bool:
+    """Narrow routine mutation forms; unknown options retain model review."""
+    if re.search(r"[|;&<>`$(){}\n\r]", command):
+        return False
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    if len(words) < 2 or words[0] != "git":
+        return False
+    sub, args = words[1], words[2:]
+    if sub == "add":
+        # Explicit paths only: broad staging may include an unmentioned credential file.
+        if args[:1] == ["--"]:
+            args = args[1:]
+        return bool(args) and all(not a.startswith("-") and a not in (".", "..", ":/")
+                                  and not re.search(r"[*?\[\]]", a) for a in args)
+    if sub == "commit":
+        # A fresh commit with a literal message; amend, hooks/config overrides stay reviewed.
+        return len(args) == 2 and args[0] in ("-m", "--message") and bool(args[1])
+    if sub in ("pull", "push"):
+        flags = {"--ff-only", "--rebase", "--no-rebase"} if sub == "pull" else {"-u", "--set-upstream"}
+        positional = [a for a in args if a not in flags]
+        return len(positional) <= 2 and all(
+            not a.startswith(("-", "+", ":")) and ":" not in a and not re.search(r"[*?\[\]]", a)
+            for a in positional)
+    return False
+
 class Engine:
     def __init__(self, classifier=None, block_floor: float = 0.35):
         self.classifier, self.block_floor = classifier, block_floor
@@ -60,7 +89,7 @@ class Engine:
         d = rules.evaluate(call)
         if d:
             return d
-        if call.tool_name == "Bash" and ALLOWLIST_RE.match(call.command):
+        if call.tool_name == "Bash" and (ALLOWLIST_RE.match(call.command) or routine_git(call.command)):
             return Decision("allow", "Read-only or routine dev command.", "allowlist")
         if call.tool_name in ("Glob", "Grep", "LS", "TodoWrite", "Task"):
             return Decision("allow", "Read-only tool.", "allowlist")

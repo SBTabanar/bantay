@@ -4,7 +4,7 @@ from bantay.cli import hook_settings, merge_settings
 def test_hook_settings_shape():
     s = hook_settings()
     pre = s["hooks"]["PreToolUse"][0]
-    assert pre["matcher"] == "Bash|Read|Write|Edit|MultiEdit|NotebookEdit|WebFetch"
+    assert pre["matcher"] == "Bash|Read|Write|Edit|MultiEdit|NotebookEdit|WebFetch|Grep|Glob"
     assert pre["hooks"][0]["command"].endswith("bantay-hook") and pre["hooks"][0]["timeout"] == 20
 
 def test_merge_keeps_existing_hooks():

@@ -2,6 +2,10 @@
 
 Read this first if you are a new AI session (Claude, Codex, anything) continuing this work.
 
+**Controller ownership transferred to Codex / GPT-6 Astra high.** Previous Claude sessions must finish only
+their already-running T8/T10/review work and report it; do not resume dispatching or start overlapping tasks
+after a usage-limit reset. Codex owns Task 14, benchmarks, final review, documentation, and release.
+
 ## What this is
 Bantay = local AI guardrail for cloud coding agents. A Python daemon on 127.0.0.1:4477 judges every tool call
 (allow / ask / block) with deterministic rules + a fine-tuned local Qwen2.5-Coder-1.5B (MLX, one forward pass,
@@ -18,8 +22,10 @@ live dashboard. Claude Code is guarded via a PreToolUse hook and `ANTHROPIC_BASE
 
 ## Process being followed
 Superpowers "subagent-driven development": one implementer agent per task (batched 1+2, 3+4, 5+6, 7+8), a
-reviewer per batch, fix rounds (max 5) with scoped re-reviews, then a whole-branch final review. All agents run
-on Opus; the controller (planner) was Fable 5.1. Implementers stage files by path only (never `git add -A`),
+reviewer per batch, fix rounds (max 5) with scoped re-reviews, then a whole-branch final review. The original agents ran
+on Opus and the original planner was Fable 5.1. Sergei resumed work with GPT-6 Astra (high reasoning)
+on 2026-10-09; this preference supersedes the earlier Opus instruction. Continue sequentially; no further
+delegation unless explicitly requested. Implementers stage files by path only (never `git add -A`),
 plain commit messages, no AI attribution trailers. Work is on branch `build`; merge to `main` at the end.
 
 ## How to run
@@ -34,6 +40,17 @@ bash demo/run.sh                          # demo setup; see demo/DEMO.md for the
 Flags: `--no-model`, `--no-gliner`, `--no-redact`, `--adapter PATH` (default adapters/bantay-lora once it exists).
 
 ## Status snapshot (update this section at every milestone)
+- Resumption milestone 1 — Task 14 implemented and independently reviewed: narrow routine git mutation
+  allowlist, force-with-lease main/master block, OpenCode plugin tamper guards, Grep/Glob hook coverage.
+  Fast suite: 252 passed, 4 slow deselected. Proxy landed c8f92ad; independent review found count_tokens
+  redaction bypass and broken Redactor.warm(), fixes next. Real training still active; benchmark waits for it.
+- 2026-10-09 resumed — GPT-6 Astra high owns remaining implementation/review work on `build` (HEAD fc70ad5).
+  Existing uncommitted work is preserved: cli/redact and their tests; proxy, bench metrics, train/eval scripts,
+  NOTES, adapter outputs, proxy/metrics tests. Previous Claude processes remain active: 800-iteration training
+  PID 50433 writes adapters/bantay-lora; smoke training PID 51929 writes a separate scratch directory.
+  Do not duplicate training or overwrite their outputs. Prior Claude session may still write T8/T10/OpenCode
+  files; verify quiescence before taking ownership. Work first on independent review/Task 14 files. Old
+  no-redact daemon PIDs 37695/39369/40728 remain; check port ownership before any live verification.
 - 2026-10-09 16:45 — CONTROLLER SESSION HIT ITS USAGE LIMIT. Subagents below were still running and write their
   reports into `.superpowers/sdd/2026-10-09-bantay/`; check those report files and `git log` before redoing anything.
   - T1-2 rules: 3 fix rounds done (head f2cfb26). Round-3 re-review IN FLIGHT. If it reports ≤ minor issues, mark

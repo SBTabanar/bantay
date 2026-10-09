@@ -96,3 +96,23 @@ def test_allowlist_routine_after_round_2(bash):
         fc = FakeClassifier("block")
         d = Engine(fc).decide(bash(cmd))
         assert d.source == "allowlist" and fc.calls == [], (cmd, d)
+
+def test_routine_git_mutations_skip_model(bash):
+    for command in ['git add app.py tests/test_app.py', 'git add -- src/',
+                    'git commit -m "fix parser"', 'git pull --ff-only origin main',
+                    'git push', 'git push -u origin feature']:
+        fc = FakeClassifier('block')
+        d = Engine(fc).decide(bash(command))
+        assert d.source == 'allowlist' and d.verdict == 'allow' and not fc.calls, (command, d)
+
+
+def test_git_mutation_allowlist_retains_review_for_risky_forms(bash):
+    for command in ['git add .', 'git add -A', 'git add *.py', 'git commit --amend -m fix',
+                    'git push --delete origin feature', 'git push origin :feature',
+                    'git push origin +HEAD:feature', 'git push --force-with-lease origin main',
+                    'git pull --upload-pack=evil origin', 'git push --receive-pack=evil origin',
+                    'git push --rece=evil origin', 'git push origin main; python steal.py',
+                    'git add .env', 'git -c core.hooksPath=/tmp/hooks commit -m fix']:
+        fc = FakeClassifier('block')
+        d = Engine(fc).decide(bash(command))
+        assert d.source != 'allowlist' and d.verdict != 'allow', (command, d)

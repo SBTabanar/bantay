@@ -303,7 +303,7 @@ def _pushes(call: ToolCall) -> list[tuple[bool, bool, bool]]:
     return out
 
 def _force_push_main(call: ToolCall) -> bool:
-    return any(hard and main for hard, _, main in _pushes(call))
+    return any((hard or lease) and main for hard, lease, main in _pushes(call))
 
 def _force_push_other(call: ToolCall) -> bool:
     return any(hard or lease for hard, lease, _ in _pushes(call)) and not _force_push_main(call)
@@ -317,6 +317,7 @@ def _secret_file_git_add(call: ToolCall) -> bool:
 
 # --- guardrail self-protection ---
 
+OPENCODE_GUARD_RE = re.compile(r"(?:^|/)(?:\.opencode|\.config/opencode)/plugins?(?:/|$)")
 GUARD_FILE_RE = re.compile(r"(?:^|/)\.claude/settings(?:\.local)?\.json$|(?:^|/)\.claude/hooks/")
 # a shell word naming the .claude dir, a settings file, or the hooks dir/contents
 GUARD_WORD_RE = re.compile(r"(?:^|/)\.claude(?:/(?:settings(?:\.local)?\.json|hooks(?:/\S*)?))?/?$")
@@ -334,16 +335,18 @@ def _guard_bash(call: ToolCall) -> bool:
     text = _literal_scan_text(call.command)
     if BANTAY_ENV_RE.search(text):
         return True
-    if GUARD_TEXT_RE.search(text) and CODE_WRITE_RE.search(text):  # e.g. a python heredoc rewriting settings
+    if (GUARD_TEXT_RE.search(text) or OPENCODE_GUARD_RE.search(text)) and CODE_WRITE_RE.search(text):  # e.g. a python heredoc rewriting settings
         return True
     where = None  # None, "claude" or "hooks": tracks `cd .claude[/hooks]`
 
     def guarded(w: str) -> bool:
-        if GUARD_WORD_RE.search(w):
+        if GUARD_WORD_RE.search(w) or OPENCODE_GUARD_RE.search(w):
             return True
         if where == "claude":
             return bool(REL_GUARD_RE.match(w))
-        return where == "hooks" and not w.startswith(("-", "/", "~", "&", "$"))
+        if where == "opencode":
+            return bool(re.match(r"^(?:\./)?plugins?(?:/|$)", w))
+        return where in ("hooks", "plugins") and not w.startswith(("-", "/", "~", "&", "$"))
 
     for words in _commands(call.command):
         name, args = os.path.basename(words[0]), words[1:]
@@ -351,6 +354,10 @@ def _guard_bash(call: ToolCall) -> bool:
             t = args[0] if args else ""
             where = "hooks" if re.search(r"(?:^|/)\.claude/hooks/?$", t) else \
                 "claude" if re.search(r"(?:^|/)\.claude/?$", t) else None
+            if re.search(r"(?:^|/)(?:\.opencode|\.config/opencode)/plugins?/?$", t):
+                where = "plugins"
+            elif re.search(r"(?:^|/)(?:\.opencode|\.config/opencode)/?$", t):
+                where = "opencode"
             continue
         for i, w in enumerate(words):
             if ">" in w:
@@ -398,6 +405,8 @@ def _edit_removes_hook(old: str, new: str) -> bool:
 def _guardrail_tamper(call: ToolCall) -> bool:
     if call.tool_name == "Bash":
         return _guard_bash(call)
+    if OPENCODE_GUARD_RE.search(call.path):
+        return True
     if not GUARD_FILE_RE.search(call.path):
         return False
     if call.tool_name == "Write":
