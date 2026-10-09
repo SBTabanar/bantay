@@ -75,6 +75,40 @@ def _git_subcommand(words: list[str]) -> tuple[str, list[str]] | None:
         i += 2 if words[i] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace") else 1
     return (words[i], words[i + 1:]) if i < len(words) else None
 
+WRAPPERS = {"sudo", "env", "command", "exec", "nohup", "time", "nice"}
+WRAPPER_VALUE_FLAGS = {"-u", "-g", "-n"}
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+
+def _commands(cmd: str, depth: int = 0) -> list[list[str]]:
+    """Word lists of every simple command, with subshell parens, wrappers (env, command, exec,
+    nohup, time, nice, sudo, VAR=x) removed and `sh -c "..."` scripts expanded recursively."""
+    out = []
+    for seg in _segments(cmd):
+        try:
+            words = shlex.split(seg)
+        except ValueError:
+            words = seg.split()
+        words = [w.lstrip("(").rstrip(");") for w in words]
+        words = [w for w in words if w]
+        while words:
+            if words[0] in WRAPPERS:
+                words = words[1:]
+                while words and words[0].startswith("-"):
+                    words = words[2:] if words[0] in WRAPPER_VALUE_FLAGS else words[1:]
+            elif re.match(r"^[A-Za-z_]\w*=", words[0]):
+                words = words[1:]
+            else:
+                break
+        if words and os.path.basename(words[0]) in SHELLS:
+            i = next((i for i, w in enumerate(words[1:], 1)
+                      if w.startswith("-") and not w.startswith("--") and "c" in w), None)
+            if i is not None and i + 1 < len(words) and depth < 3:
+                out += _commands(words[i + 1], depth + 1)
+                continue
+        if words:
+            out.append(words)
+    return out
+
 GREP_CMDS = {"grep", "egrep", "fgrep", "rg", "ag", "ack"}
 GREP_VALUE_FLAGS = {"-A", "-B", "-C", "-m", "-g", "-t", "-T", "-f", "--file", "--glob", "--type", "--max-count", "--context"}
 
@@ -119,10 +153,12 @@ def _redirections(args: list[str]) -> list[str]:
         i += 1
     return out
 
+SUBSTITUTIONS = ("$(", "`", "<(", ">(")
+
 def _literal_scan_text(cmd: str) -> str:
     """The command with grep/rg search patterns and echo/printf literals removed, so a string that
-    is only searched for or printed (e.g. `grep -rn "DROP TABLE"`) does not trip a rule. An echo
-    whose output is piped onward, or that contains command substitution, is left untouched."""
+    is only searched for or printed (e.g. `grep -rn "DROP TABLE"`) does not trip a rule. A segment
+    containing command or process substitution, or an echo piped onward, is left untouched."""
     out, last = [], 0
     for a, b in _segment_spans(cmd):
         seg = cmd[a:b]
@@ -131,12 +167,13 @@ def _literal_scan_text(cmd: str) -> str:
             continue
         name = os.path.basename(words[0])
         new = None
-        if name in GREP_CMDS:
+        if any(x in seg for x in SUBSTITUTIONS):
+            pass  # `$(...)`, backticks and process substitution run code: never strip them
+        elif name in GREP_CMDS:
             new = [words[0]] + _drop_search_pattern(words[1:])
         elif words[:2] == ["git", "grep"]:
             new = words[:2] + _drop_search_pattern(words[2:])
-        elif name in ("echo", "printf") and "$(" not in seg and "`" not in seg \
-                and not (cmd[b:b + 1] == "|" and cmd[b:b + 2] != "||"):
+        elif name in ("echo", "printf") and not (cmd[b:b + 1] == "|" and cmd[b:b + 2] != "||"):
             new = [words[0]] + _redirections(words[1:])
         if new is not None:
             out += [cmd[last:a], " " + " ".join(new) + " "]
@@ -214,8 +251,8 @@ def _is_main(ref: str, branch: str) -> bool:
 def _pushes(call: ToolCall) -> list[tuple[bool, bool, bool]]:
     """(hard_force, lease, hits_main) for every `git push` in the command."""
     out = []
-    for seg in _segments(call.command):
-        sub = _git_subcommand(_words(seg))
+    for words in _commands(call.command):
+        sub = _git_subcommand(words)
         if not sub or sub[0] != "push":
             continue
         hard = lease = all_refs = skip = False
@@ -248,11 +285,34 @@ def _force_push_other(call: ToolCall) -> bool:
     return any(hard or lease for hard, lease, _ in _pushes(call)) and not _force_push_main(call)
 
 def _secret_file_git_add(call: ToolCall) -> bool:
-    for seg in _segments(call.command):
-        sub = _git_subcommand(_words(seg))
+    for words in _commands(call.command):
+        sub = _git_subcommand(words)
         if sub and sub[0] == "add" and SECRET_FILE_RE.search(" " + " ".join(sub[1])):
             return True
     return False
+
+# --- guardrail self-protection ---
+
+GUARD_FILE_RE = re.compile(r"/\.claude/settings(?:\.local)?\.json$|/\.claude/hooks/")
+GUARD_TARGET = r"\.claude/(?:settings(?:\.local)?\.json\b|hooks/)"
+GUARD_BASH_RE = _rx(
+    rf"\b(?:rm|mv|cp|unlink|truncate|shred|tee)\b[^;&|\n]*{GUARD_TARGET}"
+    rf"|\bsed\b[^;&|\n]*\s-i[^;&|\n]*{GUARD_TARGET}"
+    rf"|>\s*[\"']?\S*{GUARD_TARGET}"
+    rf"|\bgit\s+(?:checkout|restore)\b[^;&|\n]*{GUARD_TARGET}")
+BANTAY_ENV_RE = re.compile(r"\bexport\s+BANTAY_URL=|\bunset\s+(?:-v\s+)?BANTAY_URL\b|\bBANTAY_ALLOW_MODE=[\"']?allow\b")
+
+def _guardrail_tamper(call: ToolCall) -> bool:
+    if call.tool_name == "Bash":
+        return bool(GUARD_BASH_RE.search(_literal_scan_text(call.command)) or BANTAY_ENV_RE.search(call.command))
+    if not GUARD_FILE_RE.search(call.path):
+        return False
+    if call.tool_name == "Write":
+        return "bantay-hook" not in str(call.tool_input.get("content", ""))
+    edits = [call.tool_input] if call.tool_name == "Edit" else \
+        [e for e in (call.tool_input.get("edits") or []) if isinstance(e, dict)]
+    return any(re.search(r"bantay-hook|PreToolUse|hooks", str(e.get("old_string", "")))
+               or not e.get("new_string") for e in edits)
 
 # `cp .env.example .env` seeds a new env file from a template; it reads no secrets.
 TEMPLATE_COPY_RE = re.compile(r"\b(?:cp|mv)\s+(?:-\w+\s+)*\S*\.env\.(?:example|sample|template)\s+\S+")
@@ -263,7 +323,8 @@ def _secret_file_access(call: ToolCall) -> bool:
 DISK_RE = _rx(r"\b(?:mkfs(?:\.\w+)?|diskutil\s+(?:erase|reformat)|shutdown|reboot|halt)\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:")
 SQL_DESTROY_RE = _rx(r"\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA)|TRUNCATE(?:\s+TABLE)?\s+\w+|DELETE\s+FROM\s+\w+\s*(?:;|[\"']|$))")
 PIPE_TO_SHELL_RE = _rx(
-    r"\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\b(?:\s+-\S+)*\s+)?(?:env\s+)?(?:\S*/)?(?:(?:ba|z|da|k|fi)?sh|python[0-9.]*|perl|ruby|node|php)\b"
+    r"\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\b(?:\s+-\S+)*\s+)?(?:env\s+)?(?:\S*/)?"
+    r"(?:(?:ba|z|da|k|fi)?sh\b|(?:python[0-9.]*+|perl|ruby|node|php)(?![\w.])(?!\s+-(?:m|c|e|-version)))"
     r"|\b(?:(?:ba|z|da|k)?sh|python[0-9.]*|perl|ruby|node|source|eval)\b[^|;\n]*?(?:<\(|\$\(|`)\s*(?:curl|wget)\b")
 # case-sensitive on purpose: `$monkey` is not a secret, `$OPENAI_API_KEY` is
 ENV_DUMP_RE = re.compile(
@@ -291,6 +352,9 @@ def _url_has_secret(call: ToolCall) -> bool:
     return bool(find_secrets(str(call.tool_input.get("url", ""))))
 
 RULES: list[Rule] = [
+    # --- guardrail self-protection (block) ---
+    Rule("guardrail_tamper", BASH + ("Write", "Edit", "MultiEdit"), "block",
+         "Agent attempted to disable its own guardrail.", predicate=_guardrail_tamper),
     # --- exfiltration / credential access (block) ---
     Rule("pipe_to_shell", BASH, "block", "Downloads a script and pipes it straight into a shell.", PIPE_TO_SHELL_RE),
     Rule("reverse_shell", BASH, "block", "Opens a reverse shell to a remote host.",

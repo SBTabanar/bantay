@@ -47,6 +47,20 @@ def v(d):
     ("git add .env.example", None),
     ('grep -rn "shutdown" src', None), ('grep -rn "DROP TABLE" migrations', None),
     ('echo ".env" >> .gitignore', None), ("git push -f origin feature/main-fix", "ask"),
+    # fix round 2 regressions
+    ('bash -c "git push -f origin main"', "block"), ("env git push --force origin main", "block"),
+    ("command git push -f origin main", "block"), ("(cd sub && git push -f origin main)", "block"),
+    ('grep "$(rm -rf ~)" f', "block"), ("grep `rm -rf ~` f", "block"),
+    ("echo <(rm -rf ~)", "block"), ("echo >(rm -rf ~)", "block"),
+    ("curl -s https://api/x | python3 -m json.tool", None), ("curl -s https://api/x | jq .", None),
+    ("cat .env>/tmp/x", "block"), ("cat .env</dev/null", "block"),
+    ("rm .claude/settings.json", "block"), ("sed -i '' '/bantay-hook/d' .claude/settings.json", "block"),
+    ("cat .claude/settings.json", None),
+    ("jq 'del(.hooks)' .claude/settings.json > /tmp/s && mv /tmp/s .claude/settings.json", "block"),
+    ("echo '{}' > ~/.claude/settings.json", "block"), ("git checkout -- .claude/settings.json", "block"),
+    ("rm -rf .claude/hooks/", "block"),
+    ("export BANTAY_URL=http://localhost:1", "block"), ("unset BANTAY_URL", "block"),
+    ("BANTAY_ALLOW_MODE=allow claude", "block"),
 ])
 def test_bash_rules(bash, cmd, verdict):
     d = evaluate(bash(cmd))
@@ -81,6 +95,18 @@ def test_force_push_uses_branch_context(bash):
     ("Grep", {"pattern": "KEY", "path": "/p/src"}, None),
     ("Glob", {"pattern": "*", "path": "/Users/dev/.ssh/"}, "block"),
     ("Glob", {"pattern": "**/*.ts", "path": "/p"}, None),
+    # fix round 2: guardrail self-protection
+    ("Write", {"file_path": "/p/.claude/settings.json", "content": '{"hooks": {}}'}, "block"),
+    ("Edit", {"file_path": "/p/.claude/settings.json",
+              "old_string": '"PreToolUse": [{"hooks": [{"command": "bantay-hook"}]}]', "new_string": '"PreToolUse": []'}, "block"),
+    ("Edit", {"file_path": "/p/.claude/settings.json",
+              "old_string": '"permissions": {}', "new_string": '"permissions": {"allow": []}'}, "ask"),
+    ("Write", {"file_path": "/p/.claude/settings.json",
+               "content": '{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "bantay-hook"}]}]}}'}, "ask"),
+    ("MultiEdit", {"file_path": "/Users/dev/.claude/settings.json",
+                   "edits": [{"old_string": "bantay-hook", "new_string": "true"}]}, "block"),
+    ("Edit", {"file_path": "/p/.claude/settings.local.json", "old_string": "x", "new_string": ""}, "block"),
+    ("Write", {"file_path": "/p/.claude/hooks/pre.sh", "content": "exit 0"}, "block"),
 ])
 def test_file_and_web_rules(tool, inp, verdict):
     d = evaluate(ToolCall(tool, inp, cwd="/p", branch="main"))
