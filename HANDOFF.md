@@ -2,9 +2,11 @@
 
 Read this first if you are a new AI session (Claude, Codex, anything) continuing this work.
 
-**Controller ownership transferred to Codex / GPT-6 Astra high.** Previous Claude sessions must finish only
-their already-running T8/T10/review work and report it; do not resume dispatching or start overlapping tasks
-after a usage-limit reset. Codex owns Task 14, benchmarks, final review, documentation, and release.
+**Usage checkpoint: Codex / GPT-6 Astra high has saved state for the next session.**
+Sergei requested a handoff update because usage is nearly exhausted. The Astra executor was interrupted;
+no agent work should be assumed active. The existing LoRA training process is deliberately still running.
+The next controller should take ownership here, inspect processes/files first, and avoid duplicate training
+or overlapping work from an older Claude session.
 
 ## What this is
 Bantay = local AI guardrail for cloud coding agents. A Python daemon on 127.0.0.1:4477 judges every tool call
@@ -39,39 +41,89 @@ bash demo/run.sh                          # demo setup; see demo/DEMO.md for the
 ```
 Flags: `--no-model`, `--no-gliner`, `--no-redact`, `--adapter PATH` (default adapters/bantay-lora once it exists).
 
-## Status snapshot (update this section at every milestone)
-- 2026-10-09 17:05 — CONTROLLER HIT ITS USAGE LIMIT (second time). Read the ledger's last ~15 lines for the exact
-  verdicts. Summary:
-  - T1-2 rules: head f2cfb26, round-3 re-review done: all addressed, but 1 new Important (redirected
-    `| python3 -m json.tool > f` blocks) + 1 pre-existing Important (`git commit -m "fix shutdown handler"` blocks).
-    Fix these inside Task 14 with a FRESH implementer (round 4 rule), then mark T1-2 complete.
-  - T3-4 classifier/engine: COMPLETE (head e0f09fd).
-  - T5-6 server/hook/CLI: COMPLETE.
-  - T7-8 redactor + proxy: DONE (head c8f92ad), live OAuth proxy verified. NEEDS REVIEW (see ledger for package cmd).
-    Then: pre-flight must push one warm request through the proxy (first request 9-26 s with GLiNER).
-  - T9+T10 data split + LoRA: agent was still running (writes task-9-10-report.md, commits data/, scripts/,
-    bantay/bench.py metrics, adapters/bantay-lora/, docs/NOTES.md, cli default adapter). Check `git log` and the
-    report; if absent, re-run from the brief (data is in the scratchpad gen/ dir, or already under data/raw).
-  - T12 demo: fix round done, re-review clean; depends on Task 14. Add pre-flight check for lease-push → block.
-  - OpenCode adapter: review = Needs fixes (apply_patch header regex; untranslated tools must go raw to the judge).
-  - T11 benchmarks, T13 README/submission/push, Task 14, final whole-branch review: NOT STARTED.
-- Task 14 scope (one fresh implementer, files: bantay/engine.py, bantay/rules.py, bantay/cli.py, demo settings.json,
-  tests): allowlist routine `git add <paths>|commit|pull|push` (non-force/non-delete); `--force-with-lease origin
-  main|master` → block; `Grep|Glob` in MATCHER + regenerate demo/sample-project/.claude/settings.json; `.opencode/plugin`
-  and `~/.config/opencode/plugin` paths (case-folded, normalised) in guardrail_tamper; SAFE_INTERP_RE accepts trailing
-  redirects; literal-strip `git commit -m "..."` / `-m '...'` messages before disk/sql/tamper scans. Then review.
+## Status snapshot — saved 2026-10-09 16:00 PHT
+
+Branch `build`; code HEAD before this handoff commit: `ce864b2`. Previous controller timestamps in the
+ledger may disagree with machine time; trust actual commits, files, and live processes.
+
+- T3–4 and T5–6 were previously reviewed complete. T9 data is committed (`99fd65c`).
+- Task 14 core is committed (`c47502a`): conservative routine git add/commit/pull/push allowlist,
+  force-with-lease to main/master blocked, Grep/Glob hook matcher, OpenCode plugin tamper coverage.
+  At that milestone: 252 fast tests passed, 4 slow deselected.
+- T8 proxy is committed (`c8f92ad`) and independently reviewed/fixed (`972f35f`): count_tokens
+  message redaction, fail-closed regression coverage, warm() NameError, HTTP client shutdown.
+  30 focused tests passed. Prior live OAuth verification is in `docs/NOTES.md`.
+- Latest review fix wave is **uncommitted**, preserved in the working tree: commit-message literal
+  handling and safe formatter output redirection in rules; normalized OpenCode guard paths;
+  OpenCode whitespace-free patch headers and raw forwarding of unknown/custom tools; demo preflight
+  bounds. Astra reported 212 targeted rules/engine tests and 4 OpenCode JS tests passed. These results
+  are scoped; full suite/final review has not run after this wave. Do not mark T1–2/OpenCode closed yet.
+- T10 trainer PID **50433** (parent shell 50429) is deliberately still running. Last observed iteration
+  **180/800**, train loss 1.374. Iteration-100 validation loss 1.661 (initial 3.989).
+  `adapters/bantay-lora/0000100_adapters.safetensors` and `adapters.safetensors` exist (~10 MB each).
+  They are interim checkpoints, not validated final release weights. Logs: `adapters/bantay-lora/train.log`.
+  The redundant smoke trainer 51929 and stale pytest 29211 were terminated; old daemons are gone.
+  Initial contention made training slow; recent output was 11–14 supervised tokens/s. Do not launch
+  another trainer. CLI defaults and adapter slow-test assertions are uncommitted and need validation.
+- T11 harness/cloud runner are **uncommitted**. Five metrics/parser tests passed. Rules-only run on
+  300 rows: 58.3% accuracy, 54% block recall, 1% false-block rate, p95 0.9 ms. `BENCHMARKS.md/json`
+  contain partial results; base/tuned/full-engine measurements remain pending. These rules-only
+  figures predate the latest uncommitted rules fixes and should be regenerated for final release.
+- Cloud benchmark blocked before row 1 by Claude subscription usage limit, resetting **20:10 PHT**.
+  Do not retry before reset. No API key was available in the environment. Pricing source/estimates are
+  in `bench/pricing.json`; estimated cost is not a measured cloud result. No cloud performance invented.
+- T13: README draft exists; `SUBMISSION.md`, `demo/VIDEO.md`, and `LICENSE` not yet created.
+  GitHub auth works; public `sbtabanar/bantay` repo was not yet created. No merge or push performed.
+
+## Preserved uncommitted work
+
+Tracked edits: `adapters/opencode/README.md`, `adapters/opencode/bantay.js`, `bantay/cli.py`,
+`bantay/rules.py`, `demo/DEMO.md`, `demo/run.sh`, `tests/test_classifier.py`, `tests/test_cli.py`,
+`tests/test_rules.py`. Inspect `git diff` before changing or committing them.
+
+Untracked: `BENCHMARKS.json`, `BENCHMARKS.md`, `README.md`, `adapters/bantay-lora/`,
+`bantay/bench.py`, `bench/`, `scripts/bench_cloud.py`, `scripts/eval_quick.py`, `scripts/train.sh`,
+`tests/test_bench_metrics.py`, `tests/test_opencode.mjs`. Do not delete these as scratch files.
+The ledger under `.superpowers/` is ignored by git but is maintained locally.
+
+## Resume commands
+
+```bash
+# Inspect saved work and live training before starting anything.
+git status --short
+git log -8 --oneline
+ps -p 50433 -o pid,etime,%cpu,command
+tail -12 adapters/bantay-lora/train.log
+# CPU-only verification/review can proceed while training runs.
+.venv/bin/pytest -q -m 'not slow'
+node --test tests/test_opencode.mjs
+# After the existing trainer completes, validate the adapter and run GPU work sequentially.
+.venv/bin/pytest -q
+.venv/bin/python scripts/eval_quick.py
+.venv/bin/python scripts/eval_quick.py adapters/bantay-lora
+.venv/bin/bantay bench --adapter adapters/bantay-lora
+# Only after the 20:10 PHT subscription reset:
+.venv/bin/python scripts/bench_cloud.py --limit 100
+.venv/bin/bantay bench --adapter adapters/bantay-lora
+```
 
 ## Remaining work, in order
-1. Close T1-2 / T3-4 re-reviews; Task 14 engine hardening (see ledger ruling).
-2. T8 proxy lands → live-verify `ANTHROPIC_BASE_URL=http://127.0.0.1:4477/anthropic claude -p "..."` redacts.
-3. T10 adapter → `bantay serve` uses it by default; restore absolute slow-test check.
-4. T11 `bantay bench` + `scripts/bench_cloud.py` → `BENCHMARKS.md` (local rows + cloud Haiku row + cost/10k).
-5. T13 README (disclosure paragraph is spec §6), SUBMISSION.md, demo/VIDEO.md, MIT LICENSE, public repo
-   `sbtabanar/bantay` (fake demo keys may trip push protection — allow as test data or reshape them).
-6. Final whole-branch review → fix wave → merge `build` into `main` → push.
-7. Sergei: live rehearsal with Claude Code in demo/sample-project, record the 60-second reel, post on LinkedIn/X
-   tagging Cognition + #appbuildersph, fill the submission form (project name, description, members, repo,
-   video, post link, disclosure).
+
+1. Review the uncommitted rules/OpenCode/demo fix wave, run CPU tests, path-stage and commit it.
+   Reconcile late reports in the ledger directory; T3–4 is already complete, T14 core and T8 fixes
+   already landed. Avoid reimplementing those. Final branch review remains required.
+2. Let existing T10 training finish; evaluate base vs tuned and run the restored adapter slow tests.
+   Record actual results in NOTES. Review and commit training scripts, default adapter wiring, tests,
+   config and chosen weights. If quality is poor, investigate data/training before claiming success.
+3. Review/finish T11 harness and run local benchmark rows after training; rerun rules-only for current
+   code. Run cloud after usage reset, or explicitly retain unavailable status. Commit reproducible results.
+4. Finish T13 README with actual metrics, SUBMISSION.md (spec §6 disclosure), demo/VIDEO.md shot list
+   and social-post draft, MIT LICENSE. User requested function first; no dashboard design polish.
+5. Final whole-branch review and fix wave, full tests, create public `sbtabanar/bantay`, merge build→main
+   and push per original plan. If fake test secrets trip protection, reshape fixtures rather than
+   misrepresenting real secrets. Public release has not happened yet.
+6. Sergei: live rehearsal, record the 60-second reel, publish LinkedIn/X post tagging Cognition and
+   #appbuildersph, fill submission form. Video/post links remain pending; do not claim submitted.
 
 ## Submission checklist (hard requirements)
 Project name, short description, team members, PUBLIC GitHub repo, 1-minute demo video, X or LinkedIn post
