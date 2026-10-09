@@ -1,27 +1,52 @@
 # Bantay
 
-A local safety judge and privacy proxy for cloud coding agents. Built by Sergei Benjamin Tabanar for AppBuilders PH, October 9–10, 2026.
+A local AI guardrail for cloud coding agents: it judges every tool call on your laptop before it runs, and strips secrets and personal data from prompts before they leave.
 
-Bantay checks proposed tool calls before execution, returning **allow**, **ask**, or **block**. Deterministic rules catch known dangerous patterns; a local Qwen classifier judges other actions. A separate proxy replaces detected secrets and personal data in outbound message content with placeholders, then restores them in replies.
+*Bantay* is Filipino for "guard" or "watch". Built by Sergei Benjamin Tabanar for AppBuilders PH, October 9–10, 2026.
+
+Bantay answers each proposed tool call with **allow**, **ask**, or **block**. Deterministic rules catch known dangerous patterns, a routine allowlist lets everyday commands through, and a fine-tuned local Qwen2.5-Coder model judges the rest. A separate proxy replaces secrets and personal data in outbound messages with placeholders, then restores them in the reply.
 
 ## Why local
 
-The safety judge sees the commands and sensitive content it protects. Running that judge locally avoids sending those inputs to a second cloud service, keeps decisions available offline, and has no per-decision API charge. Rules and routine command checks are fast; model latency is measured separately in [BENCHMARKS.md](BENCHMARKS.md).
+1. **The judge must not be the defendant.** If the safety check is another cloud API call, the agent's provider grades its own homework, and the check disappears when the network or the API does.
+2. **Every tool call, every time.** A busy agent session issues hundreds of tool calls. A cloud round trip of 600–1500 ms per call makes the agent unusable. A local verdict takes about 90 ms; a rule block takes about 1 ms.
+3. **It must see the secrets to protect them.** To block a `.env` leak or redact an API key from an outbound prompt, the checker reads the raw secret. That data cannot be sent anywhere by definition.
+4. **Offline and free.** It works on a plane or during a brownout, and costs nothing per decision. Ten thousand decisions through a cloud classifier is real money; through Bantay it is electricity.
 
 ## How it works
 
 ```text
-Claude Code ── PreToolUse hook ──> bantayd on 127.0.0.1:4477
-OpenCode ───── local plugin ─────>   rules → routine allowlist → Qwen + LoRA
-                                    ↓ allow / ask / block
-
-Claude Code ── Anthropic proxy ──> regex + GLiNER → placeholders → Anthropic
-                                    ↑ restored reply           ← response
-
-Browser ──> local dashboard: decisions, reasons, timings, redaction previews
+┌─ your laptop ──────────────────────────────────────────────────────────────┐
+│                                                                            │
+│  Claude Code ── PreToolUse hook ──┐                                        │
+│  OpenCode ───── local plugin ─────┼──> bantayd  127.0.0.1:4477             │
+│                                   │      1. rules (~1 ms, the floor)       │
+│                                   │      2. routine allowlist (npm test)   │
+│                                   │      3. Qwen2.5-Coder-1.5B + LoRA      │
+│                                   │         via MLX (~90 ms verdict)       │
+│                                   └──<── allow / ask / block + reason      │
+│                                                                            │
+│      what leaves the laptop for decisions: nothing                         │
+│                                                                            │
+│  Claude Code ── ANTHROPIC_BASE_URL ──> /anthropic proxy                    │
+│       ▲                                  regex: keys, email, PH phone,     │
+│       │                                    TIN, SSS, PhilHealth, cards     │
+│       │                                  GLiNER: names, addresses          │
+│       │                                  "Maria" -> <PERSON_1>             │
+│       │                                        │                           │
+│       └──── reply, placeholders restored ◄─────┼──────────┐                │
+│                                                │          │                │
+│  Browser ──> http://127.0.0.1:4477 dashboard   │          │                │
+│              decisions, reasons, timings,      │          │                │
+│              last redaction                    │          │                │
+└────────────────────────────────────────────────┼──────────┼────────────────┘
+                                                 ▼          │
+          what leaves the laptop:     Anthropic API (cloud) ┘
+          the conversation, with secrets and personal data
+          replaced by placeholders (the map stays in memory)
 ```
 
-The judge makes no cloud calls. The proxy forwards the coding agent's cloud traffic. Those are separate paths: offline decisions work after downloading the models, while Claude Code still needs its provider to generate responses.
+The judge makes no network calls. The proxy forwards the coding agent's own cloud traffic. The two paths are independent: decisions keep working with WiFi off, while the coding agent still needs its provider to think.
 
 ## Quick start
 
@@ -33,40 +58,66 @@ cd bantay
 uv venv -p 3.12 .venv
 uv pip install -p .venv/bin/python -e '.[dev,pii]'
 source .venv/bin/activate
-bantay install --project /absolute/path/to/your/project
-bantay serve
+
+bantay serve                      # daemon + dashboard on http://127.0.0.1:4477
 ```
 
-Open <http://127.0.0.1:4477>. In another terminal:
+In another terminal, from the project you want to guard:
 
 ```bash
-cd /absolute/path/to/your/project
+bantay install --project .        # adds the PreToolUse hook to ./.claude/settings.json
 ANTHROPIC_BASE_URL=http://127.0.0.1:4477/anthropic claude
 ```
 
-The first run downloads model weights. The default adapter is `adapters/bantay-lora/adapters.safetensors` when present. Training and full model measurements are still in progress in this checkout; until the weights exist, the base model over-blocks. `bantay serve --no-model` uses rules and the routine allowlist, and asks for unmatched calls. `--adapter none` explicitly selects the base model.
-
-`--no-gliner` keeps regex redaction while skipping name/address detection. `--no-redact` disables the proxy and redaction endpoint. A first Claude Code request can contain hundreds of kilobytes of context: observed GLiNER redaction took 9–26 seconds, with repeated blocks served from cache. See [verification notes](docs/NOTES.md).
-
-## Commands and adapters
+For OpenCode:
 
 ```bash
-bantay check 'rm -rf ~/Documents'       # block; exit status 2
-bantay check 'npm test'                # routine allowlist
+bantay install --opencode --project .   # copies the plugin to ./.opencode/plugin/bantay.js
+opencode
+```
+
+The first run downloads the model weights once (Qwen 4-bit about 0.9 GB, GLiNER about 1.1 GB). The bundled LoRA adapter at `adapters/bantay-lora` is used by default. Useful flags:
+
+| Flag | Effect |
+|---|---|
+| `--no-model` | rules and allowlist only; unmatched calls become **ask** |
+| `--adapter none` | base model without the Bantay adapter (it over-blocks) |
+| `--no-gliner` | regex-only redaction; skips name and address detection |
+| `--no-redact` | disables the proxy and the redaction endpoint |
+
+## Commands
+
+```bash
+bantay check 'rm -rf ~/Documents'       # block, exit status 2
+bantay check 'npm test'                 # allow (routine allowlist)
+bantay check --tool Read .env           # block (read_secret_file)
 bantay redact 'Contact demo@example.test' --no-gliner
 bantay install --project /path/to/repo
 bantay install --opencode --project /path/to/repo
-bantay bench --no-model                # rules-only measurement
-bantay bench                          # all local systems; requires trained adapter
+bantay bench                            # local benchmark rows into BENCHMARKS.md
 ```
 
-Claude Code hooks cover Bash, Read, Write, Edit, MultiEdit, NotebookEdit, WebFetch, Grep, and Glob. If the daemon is unavailable, the hook returns **ask**. Do not rely on interactive asks in a mode that bypasses the agent's own permissions; use normal permissions for ordinary work.
+`bantay check` asks the running daemon, and judges in-process if no daemon is running.
 
-The [OpenCode plugin](adapters/opencode/bantay.js) applies the same local judge to supported tools. OpenCode's before-tool callback cannot display a human approval dialog, so **ask** refuses the action with an explanation. It fails closed when the daemon cannot be reached. This adapter checks tools; OpenCode provider traffic is not automatically routed through the Anthropic privacy proxy.
+The Claude Code hook covers Bash, Read, Write, Edit, MultiEdit, NotebookEdit, WebFetch, Grep, and Glob. If the daemon is unreachable, the hook returns **ask**.
+
+The [OpenCode plugin](adapters/opencode/) applies the same judge to OpenCode's tools, including each file in an `apply_patch`. It fails closed when the daemon cannot be reached. See its [README](adapters/opencode/README.md).
+
+## What runs locally, what needs internet
+
+| Runs on the laptop | Needs internet |
+|---|---|
+| Decision rules and routine allowlist | The coding agent's own provider (Claude Code calling Anthropic) |
+| Qwen2.5-Coder-1.5B-Instruct 4-bit + Bantay LoRA, via MLX | One-time download of model weights from Hugging Face |
+| Reason generation for model-decided ask/block | The optional cloud benchmark (`scripts/bench_cloud.py`) |
+| Redaction: regex patterns + GLiNER multi-PII | |
+| The daemon, proxy, dashboard, hook, and OpenCode plugin | |
+
+After the first download, the judge, the redactor, and the dashboard run with no network at all.
 
 ## HTTP API
 
-All endpoints bind to loopback only. No authentication is implemented; use on a trusted local machine.
+Everything binds to loopback. There is no authentication; use it on a machine you trust.
 
 ```bash
 curl -s http://127.0.0.1:4477/decide \
@@ -78,39 +129,63 @@ curl -s http://127.0.0.1:4477/redact \
   -d '{"text":"Contact demo@example.test"}'
 ```
 
-`POST /decide` returns verdict, reason, source, rule, probabilities, and latency. `POST /redact` returns redacted text and counts; mappings stay in daemon memory. `GET /health`, `/stats`, and `/events` provide health, counters, and server-sent events. `/anthropic/v1/messages` and `/anthropic/v1/messages/count_tokens` redact supported message content before forwarding. API-key and Claude subscription OAuth forwarding were live-verified for messages.
+`POST /decide` returns verdict, reason, source, rule, probabilities, and latency. `POST /redact` returns redacted text and counts; the mapping stays in daemon memory. `GET /health`, `/stats`, and `/events` serve health, counters, and server-sent events for the dashboard. `/anthropic/v1/messages` and `/anthropic/v1/messages/count_tokens` redact message content before forwarding. Authentication headers pass through untouched. Forwarding was verified live with a Claude subscription (OAuth) login, and API-key forwarding is covered by tests; see [docs/NOTES.md](docs/NOTES.md).
 
-## Data, training, and benchmarks
+Any agent with a pre-tool hook can use `POST /decide`. Claude Code and OpenCode are the two adapters in this repository.
 
-The synthetic corpus contains 2,300 teacher-generated examples plus hand-authored seeds, with 300 examples held out. [Data scripts](scripts/) preserve category labels and reproducible splits. The original generation report records a 40-row human-style review by the implementing agent; this is not an independently human-audited dataset. Secrets and identities in fixtures are synthetic.
+## Models and tools
+
+Runs locally: all decision-making (deterministic rules, a routine allowlist, and Qwen2.5-Coder-1.5B-Instruct 4-bit with a Bantay LoRA adapter, via MLX), secret and personal-data redaction (GLiNER `gliner_multi_pii-v1` for names and addresses, plus regexes for API keys, emails, Philippine mobile numbers, TIN, SSS, PhilHealth, and card numbers), the daemon, the proxy, the dashboard, the Claude Code hook, and the OpenCode plugin. Requires internet: only the coding agent itself (Claude Code calling Anthropic's API) and the one-time model download. The model is about 0.9 GB on disk and the LoRA adapter about 10 MB; the daemon with the model uses under 2 GB of RAM. Cloud AI as a secondary component: Claude generated the 2,300-row synthetic training set (31 categories, 300 rows held out) and is the cloud comparison baseline in the benchmarks. On the held-out set the fine-tuned adapter reaches 91.3% accuracy against 33.3% for the base model, with 93% block recall and a 2% false-block rate. Frameworks: Python 3.12, mlx-lm, GLiNER, FastAPI/uvicorn, httpx, Claude Code hooks, and the OpenCode plugin API. Development was assisted by Claude and Codex.
+
+## Benchmarks
+
+Held-out set: 300 synthetic tool calls (100 allow, 100 ask, 100 block), never seen in training. Apple M4, 16 GB.
+
+<!-- BENCHMARKS:START -->
+| System | Accuracy | Block recall | False blocks / true allow | p50 ms |
+|---|---:|---:|---:|---:|
+| Rules only | 58.3% | 54.0% | 1.0% | 0.4 |
+| Base Qwen2.5-Coder-1.5B 4-bit | 33.3% | 100% | 100% | 126 |
+| Qwen + Bantay LoRA | 91.3% | 93.0% | 2.0% | 88–95 |
+| Cloud (Claude) | pending | pending | pending | pending |
+
+Model rows measure warm classification. A model-written reason for ask/block adds about 0.3 s. Full table, methodology, and raw metrics in [BENCHMARKS.md](BENCHMARKS.md) and [BENCHMARKS.json](BENCHMARKS.json).
+<!-- BENCHMARKS:END -->
+
+The base model predicts block for 299 of 300 rows, which is why its block recall is perfect and it is unusable. The adapter fixes that: tuned confusion (rows true, columns allow/ask/block) is allow [91, 7, 2], ask [2, 90, 8], block [0, 7, 93]. Training details are in [docs/NOTES.md](docs/NOTES.md).
+
+Reproduce:
 
 ```bash
-bash scripts/train.sh
+bash scripts/train.sh                                   # ~80 min on an M4
 .venv/bin/python scripts/eval_quick.py adapters/bantay-lora
 bantay bench
-.venv/bin/python scripts/bench_cloud.py
-bantay bench                         # incorporates recorded cloud results
-.venv/bin/pytest -q                  # includes model-dependent slow checks
-.venv/bin/pytest -q -m 'not slow'     # fast checks
-node --test tests/test_opencode.mjs  # adapter checks, if this filename exists in your checkout
+.venv/bin/python scripts/bench_cloud.py                 # optional, needs Claude Code login
+.venv/bin/pytest -q -m 'not slow'                        # fast checks
+.venv/bin/pytest -q                                      # includes model-dependent checks
+node --test tests/test_opencode.mjs                      # OpenCode adapter checks
 ```
-
-The reproducible [benchmark report](BENCHMARKS.md) and [raw metrics](BENCHMARKS.json) distinguish classification from full decisions with generated reasons. Currently recorded: rules-only, 300 rows, 58.3% accuracy, 54.0% block recall, 1.0% false blocks among true allow cases, 0.9 ms p95. Base, LoRA, full-engine, and cloud measurements are pending. The cloud runner currently encounters a subscription session limit; there is no measured cloud comparison yet.
 
 ## Limitations
 
-- Apple Silicon/MLX is the supported inference backend. Linux, Windows, and Ollama are follow-up work.
-- This is a heuristic guardrail, not an operating-system sandbox. Shell indirection, unrecognized tools, and model errors can bypass protection. Do not grant agents access you cannot afford to lose.
-- Rules run before the routine allowlist. The allowlist deliberately permits project execution such as tests/builds; repository git hooks/config can also execute code. Broad staging (`git add .`, `git add -A`) retains review; explicit safe paths can skip the model.
-- The untuned base model favors block. Classifier scores are relative label probabilities, not independently calibrated risk estimates. Low-confidence allow decisions with substantial block probability become ask.
-- Model-generated reasons add latency. Rule/allowlist decisions, model classification, and complete model decisions have different timing profiles.
-- Redaction detects supported regex patterns and GLiNER entities; it cannot guarantee finding all sensitive data. Names may be missed or falsely detected. If GLiNER cannot load, the service logs the failure and uses regex-only detection.
-- Top-level system prompts, system-role messages, signed thinking, image/document payloads, and unrelated proxy endpoints are not scanned. Assistant history re-masks previously known originals. Keep secrets out of excluded channels.
-- Placeholder mappings and original/redacted dashboard previews are held in process memory. They are shared by clients of that daemon; restart it between unrelated trust contexts. No disk audit log is written by Bantay.
-- The daemon trusts local callers. Hook enforcement depends on the host agent honoring hook verdicts; interactive bypass-mode ask behavior still needs a live rehearsal.
+- **Apple Silicon only tonight.** Inference uses MLX. Linux, Windows, and an Ollama backend are follow-up work.
+- **The allowlist is a latency shortcut, not a sandbox.** It lets routine development commands skip the model, and some of them run project code by design (`npm test`, `make`, `pytest`). Rules run first on every command. Repository-local git config such as `core.fsmonitor` can still run code on `git status`.
+- **The model can be wrong.** Accuracy on the held-out set is 91.3%, and that set is synthetic. Classifier scores are relative label probabilities, not calibrated risk. A low-confidence allow becomes ask.
+- **Rules are the floor.** Secret-file reads, force-push to main, environment dumps, pipe-to-shell, and exfiltration uploads are caught by deterministic rules and never depend on the model. This is still a heuristic guardrail, not an operating-system sandbox: shell indirection and unrecognized tools can get past it. Do not give an agent access you cannot afford to lose.
+- **The first proxied request is slow.** Claude Code's first request carries a few hundred kilobytes of context. GLiNER scanning it took 9–26 s on CPU; later requests hit a per-block cache. `--no-gliner` makes redaction regex-only and near-instant.
+- **OpenCode cannot prompt on ask.** OpenCode's plugin API has no approval dialog, so an **ask** verdict is refused with an explanation. Run the action yourself, or use the Claude Code adapter, which shows a real prompt.
+- **Redaction is best effort.** It finds supported regex patterns and GLiNER entities; names can be missed or falsely detected. Top-level system prompts, system-role messages, signed thinking, and image or document payloads are forwarded unscanned. If GLiNER cannot load, Bantay falls back to regex-only and logs it.
+- **Memory only.** Placeholder mappings and dashboard previews live in daemon memory and are shared by all its clients; restart it between unrelated trust contexts. Bantay writes no audit log to disk.
+- **The daemon trusts local callers.** Enforcement depends on the host agent honoring hook verdicts.
 
-## Disclosure
+## Built during the hackathon
 
-Runs locally: decision rules, the Qwen2.5-Coder-1.5B-Instruct 4-bit classifier via MLX (using the Bantay LoRA adapter when available), GLiNER multi-PII and regex redaction, the daemon, dashboard, and adapters. Requires internet: the coding agent's provider, initial model downloads, and the separate optional cloud benchmark. Cloud Claude generated synthetic training examples; the cloud comparison runner is implemented but results are pending. Built with Python 3.12, mlx-lm, GLiNER, FastAPI/uvicorn, httpx, Claude Code hooks, and an OpenCode plugin. Development was assisted by Claude and Codex.
+Everything in this repository was written on 2026-10-09 and 2026-10-10 for AppBuilders PH: the rules, daemon, dashboard, hook, OpenCode plugin, redaction proxy, dataset scripts, training data, LoRA adapter, and benchmark harness. Pre-existing open weights: Qwen2.5-Coder-1.5B-Instruct (4-bit MLX conversion by mlx-community) and GLiNER `urchade/gliner_multi_pii-v1`. Claude generated the synthetic training data and serves as the cloud comparison baseline. Secrets, names, and identifiers in the dataset, tests, and demo project are fake.
 
-See the [five-minute demo](demo/DEMO.md), [60-second recording plan](demo/VIDEO.md), and [submission answers](SUBMISSION.md). Code is [MIT licensed](LICENSE); model weights retain their upstream licenses.
+See the [five-minute demo script](demo/DEMO.md), the [60-second video plan](demo/VIDEO.md), and the [submission answers](SUBMISSION.md).
+
+## Hackathon
+
+Built solo for AppBuilders PH (October 9–10, 2026) by **Sergei Benjamin Tabanar**.
+
+Code is [MIT licensed](LICENSE). Model weights keep their upstream licenses.
