@@ -192,8 +192,9 @@ def attach_redact_routes(app: FastAPI):
         headers = {k: v for k, v in req.headers.items() if k.lower() not in HOP}
         headers["accept-encoding"] = "identity"
         is_messages = path.rstrip("/").endswith("/messages") or path.rstrip("/") == "messages"
+        carries_messages = is_messages or path.rstrip("/").endswith("/messages/count_tokens")
         send = raw
-        if is_messages and raw:
+        if carries_messages and raw:
             try:
                 body = json.loads(raw)
             except Exception:

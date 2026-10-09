@@ -131,7 +131,7 @@ def test_assistant_history_is_remasked_but_thinking_untouched():
     assert blocks[2]["input"]["command"] == "mail <EMAIL_1>"
     assert new["messages"][1]["content"] == "sent to <EMAIL_1>"
 
-def test_non_messages_paths_are_byte_for_byte(monkeypatch):
+def test_count_tokens_redacts_request_but_preserves_response(monkeypatch):
     seen = {}
     async def up(request):
         seen["body"] = request.content; seen["url"] = str(request.url); seen["ae"] = request.headers.get("accept-encoding")
@@ -140,7 +140,8 @@ def test_non_messages_paths_are_byte_for_byte(monkeypatch):
     r.redact("a@b.com")
     raw = b'{"messages":[{"role":"user","content":"a@b.com"}]}'
     resp = c.post("/anthropic/v1/messages/count_tokens?beta=true", content=raw, headers={"content-type": "application/json", "authorization": "Bearer t"})
-    assert seen["body"] == raw and seen["url"].endswith("/v1/messages/count_tokens?beta=true") and seen["ae"] == "identity"
+    assert json.loads(seen["body"])["messages"][0]["content"] == "<EMAIL_1>"
+    assert seen["url"].endswith("/v1/messages/count_tokens?beta=true") and seen["ae"] == "identity"
     assert resp.content == b'{"echo":"<EMAIL_1> a@b.com"}' and resp.headers["x-upstream"] == "1"
 
 def test_non_stream_messages_response_restored_and_query_kept(monkeypatch):
@@ -192,3 +193,15 @@ def test_redact_event_finds_change_in_earlier_message(monkeypatch):
     c.post("/anthropic/v1/messages", json=body)
     ev = [e for e in c.app.state.bus.history if e["type"] == "redact"][-1]
     assert ev["redacted"].endswith("hi <EMAIL_1>") and ev["original"].endswith("hi juan@x.ph")
+
+
+def test_redaction_failure_never_forwards_messages_or_token_count(monkeypatch):
+    class BrokenRedactor(Redactor):
+        def redact(self, text):
+            raise RuntimeError("failure")
+    async def up(request):
+        pytest.fail("unredacted body reached upstream")
+    c, _ = _app_with(monkeypatch, up, BrokenRedactor(use_gliner=False))
+    for path in ('/anthropic/v1/messages', '/anthropic/v1/messages/count_tokens'):
+        response = c.post(path, json={'messages': [{'role': 'user', 'content': 'private@example.test'}]})
+        assert response.status_code == 500

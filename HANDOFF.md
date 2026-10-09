@@ -40,6 +40,13 @@ bash demo/run.sh                          # demo setup; see demo/DEMO.md for the
 Flags: `--no-model`, `--no-gliner`, `--no-redact`, `--adapter PATH` (default adapters/bantay-lora once it exists).
 
 ## Status snapshot (update this section at every milestone)
+- Resource cleanup — terminated redundant smoke trainer PID 51929 with SIGTERM after verifying its
+  separate scratch output and 10-iteration command; it competed with the real 800-iteration run on 16 GB.
+  Real trainer PID 50433 preserved. Initial validation only is logged; benchmark model runs remain deferred.
+- Resumption milestone 2 — Proxy review corrections: count_tokens now redacts user/tool messages and
+  fails closed on redaction errors; Redactor.warm fixed; upstream HTTP client closes on daemon shutdown.
+  Focused proxy/server/redactor tests passed (30, one slow deselected). T8 implementation report now exists.
+  Official Haiku 5.5 pricing checked: $0.10 input / $0.50 output per MTok for prompts <=100k tokens.
 - Resumption milestone 1 — Task 14 implemented and independently reviewed: narrow routine git mutation
   allowlist, force-with-lease main/master block, OpenCode plugin tamper guards, Grep/Glob hook coverage.
   Fast suite: 252 passed, 4 slow deselected. Proxy landed c8f92ad; independent review found count_tokens

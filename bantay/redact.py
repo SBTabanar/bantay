@@ -132,10 +132,9 @@ class Redactor:
 
     def warm(self):
         """Load the NER model ahead of the first request."""
-        spans = _non_overlapping(spans)
-        ner = []
-        gl = self._gl()
-        if gl is not None: gl.predict_entities("warm up", GLINER_LABELS, threshold=self.threshold)
+        with self._gl_lock:
+            gl = self._gl()
+            if gl is not None: gl.predict_entities("warm up", GLINER_LABELS, threshold=self.threshold)
 
     def _ph(self, kind: str, original: str) -> str:
         with self._lock:

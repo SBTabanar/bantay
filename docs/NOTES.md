@@ -21,4 +21,4 @@ Caveats seen live:
   with GLiNER on CPU that took 9-26 s. Later requests hit the per-block cache (0.2 ms for an identical turn).
   `--no-gliner` makes it regex-only and near-instant.
 - Top-level `system` and `role: "system"` messages are forwarded unredacted (by design in the brief).
-- `/v1/messages/count_tokens` and other non-`/messages` paths are forwarded byte-for-byte, unredacted.
+- Review correction: `/v1/messages/count_tokens` now redacts outbound messages too. Its response and unrelated non-message endpoints pass through unchanged. Regression tests cover this route and fail-closed behavior.

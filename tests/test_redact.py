@@ -93,3 +93,14 @@ def test_reapply_respects_word_boundaries_and_large_texts_are_cached():
     big = "Ana " + "x" * 120_000
     first = r.redact(big)
     assert r.redact(big) is first
+
+
+def test_warm_loads_and_exercises_detector(monkeypatch):
+    r = Redactor(use_gliner=False)
+    calls = []
+    class Detector:
+        def predict_entities(self, text, labels, threshold):
+            calls.append(text)
+    monkeypatch.setattr(r, '_gl', lambda: Detector())
+    r.warm()
+    assert calls == ['warm up']

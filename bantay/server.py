@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio, json, os, subprocess, time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
@@ -22,7 +23,14 @@ def git_branch(cwd: str) -> str:
     _branch_cache[cwd] = (now, b); return b
 
 def create_app(engine: Engine, redactor=None, upstream: str = "https://api.anthropic.com") -> FastAPI:
-    app = FastAPI(title="bantayd")
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+        client = getattr(app.state, "proxy_client", None)
+        if client is not None:
+            await client.aclose()
+
+    app = FastAPI(title="bantayd", lifespan=lifespan)
     bus = EventBus()
     app.state.engine, app.state.bus, app.state.redactor, app.state.upstream = engine, bus, redactor, upstream
 
