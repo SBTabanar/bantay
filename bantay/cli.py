@@ -19,6 +19,14 @@ def merge_settings(existing: dict, add: dict) -> dict:
     return out
 
 OPENCODE_PLUGIN = Path(__file__).resolve().parent.parent / "adapters" / "opencode" / "bantay.js"
+BUNDLED_ADAPTER = Path(__file__).resolve().parent.parent / "adapters" / "bantay-lora"
+
+def default_adapter() -> str | None:
+    """BANTAY_ADAPTER if set (empty or "none" = base model), else the bundled LoRA adapter if present."""
+    env = os.environ.get("BANTAY_ADAPTER")
+    if env is not None:
+        return env if env.strip() and env.strip().lower() != "none" else None
+    return str(BUNDLED_ADAPTER) if (BUNDLED_ADAPTER / "adapters.safetensors").exists() else None
 
 def install_opencode(project: str | None, src: Path = OPENCODE_PLUGIN) -> Path:
     target = Path(project or os.getcwd()).expanduser() / ".opencode" / "plugin" / "bantay.js"
@@ -40,7 +48,8 @@ def build_engine(a):
     if a.no_model:
         return Engine(None)
     from .classifier import Classifier, DEFAULT_MODEL
-    return Engine(Classifier(a.model or DEFAULT_MODEL, a.adapter))
+    adapter = a.adapter if a.adapter and a.adapter.lower() != "none" else None
+    return Engine(Classifier(a.model or DEFAULT_MODEL, adapter))
 
 def build_redactor(a):
     if a.no_redact: return None
@@ -72,7 +81,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="bantay")
     sub = p.add_subparsers(dest="cmd", required=True)
     def common(sp):
-        sp.add_argument("--model"); sp.add_argument("--adapter", default=os.environ.get("BANTAY_ADAPTER"))
+        sp.add_argument("--model"); sp.add_argument("--adapter", default=default_adapter(), help="LoRA adapter dir ('none' = base model)")
         sp.add_argument("--no-model", action="store_true"); sp.add_argument("--no-gliner", action="store_true")
     s = sub.add_parser("serve"); common(s); s.add_argument("--port", type=int, default=4477)
     s.add_argument("--no-redact", action="store_true"); s.add_argument("--upstream", default="https://api.anthropic.com"); s.set_defaults(fn=cmd_serve)

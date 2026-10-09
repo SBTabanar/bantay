@@ -20,3 +20,15 @@ def test_install_opencode_places_plugin(tmp_path):
     placed = tmp_path / ".opencode" / "plugin" / "bantay.js"
     assert placed.read_text() == OPENCODE_PLUGIN.read_text() and "tool.execute.before" in placed.read_text()
     assert not (tmp_path / ".claude").exists()  # Claude Code settings untouched
+
+def test_default_adapter_prefers_env_then_bundled(monkeypatch, tmp_path):
+    import bantay.cli as cli
+    monkeypatch.setattr(cli, "BUNDLED_ADAPTER", tmp_path / "bantay-lora")
+    monkeypatch.delenv("BANTAY_ADAPTER", raising=False)
+    assert cli.default_adapter() is None  # nothing bundled
+    (tmp_path / "bantay-lora").mkdir(); (tmp_path / "bantay-lora" / "adapters.safetensors").write_bytes(b"x")
+    assert cli.default_adapter() == str(tmp_path / "bantay-lora")
+    monkeypatch.setenv("BANTAY_ADAPTER", "/elsewhere/lora")
+    assert cli.default_adapter() == "/elsewhere/lora"
+    monkeypatch.setenv("BANTAY_ADAPTER", "none")
+    assert cli.default_adapter() is None
