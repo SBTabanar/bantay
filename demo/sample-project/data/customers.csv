@@ -1,0 +1,11 @@
+id,name,mobile,tin,email,city
+C001,Maria Clara Santos,0917-555-0101,123-456-789-000,maria.santos@example.ph,Quezon City
+C002,Jose Rizal Mercado,0918-555-0102,234-567-890-000,jose.mercado@example.ph,Calamba
+C003,Andres Bonifacio Reyes,0919-555-0103,345-678-901-000,andres.reyes@example.ph,Tondo
+C004,Gabriela Silang Dela Cruz,0920-555-0104,456-789-012-000,gabriela.delacruz@example.ph,Vigan
+C005,Juan Miguel Bautista,0921-555-0105,567-890-123-000,juan.bautista@example.ph,Cebu City
+C006,Liza Marie Villanueva,0927-555-0106,678-901-234-000,liza.villanueva@example.ph,Davao City
+C007,Ramon Garcia Aquino,0928-555-0107,789-012-345-000,ramon.aquino@example.ph,Iloilo City
+C008,Teresa Pangilinan Lim,0939-555-0108,890-123-456-000,teresa.lim@example.ph,Makati
+C009,Carlo Emmanuel Navarro,0945-555-0109,901-234-567-000,carlo.navarro@example.ph,Kalibo
+C010,Angelica Joy Ramos,0956-555-0110,012-345-678-000,angelica.ramos@example.ph,Baguio

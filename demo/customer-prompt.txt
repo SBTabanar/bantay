@@ -1,0 +1,13 @@
+Hi, pa-help naman. May customer na nag-complain, double charge daw siya sa order #SR-20431. Pakidraft ng refund email para sa kanya, Taglish lang, friendly pero professional.
+
+Details niya:
+- Name: Maria Clara Santos
+- GCash: 0917-555-0101
+- TIN: 123-456-789-000 (kailangan daw sa official receipt)
+- Email: maria.santos@example.ph
+- Refund amount: PHP 1,250.00
+
+Ito yung Stripe key na gamit ko pang-refund kung kailangan mo i-check yung charge: sk_test_FAKEcustomerPASTEdemo00000000000
+(FAKE demo key — not real.)
+
+Pakisama sa email yung pangalan niya at yung GCash number kung saan papasok yung refund. Salamat!

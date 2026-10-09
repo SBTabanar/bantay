@@ -1,0 +1,12 @@
+{
+  "name": "sari-refunds",
+  "version": "0.3.1",
+  "private": true,
+  "description": "Refund and customer-support helper for a small PH online shop (Bantay demo fixture).",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "node -e \"console.log('ok')\"",
+    "dev": "node --experimental-strip-types src/index.ts"
+  },
+  "license": "UNLICENSED"
+}
