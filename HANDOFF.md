@@ -40,41 +40,26 @@ bash demo/run.sh                          # demo setup; see demo/DEMO.md for the
 Flags: `--no-model`, `--no-gliner`, `--no-redact`, `--adapter PATH` (default adapters/bantay-lora once it exists).
 
 ## Status snapshot (update this section at every milestone)
-- Resource cleanup — terminated redundant smoke trainer PID 51929 with SIGTERM after verifying its
-  separate scratch output and 10-iteration command; it competed with the real 800-iteration run on 16 GB.
-  Real trainer PID 50433 preserved. Initial validation only is logged; benchmark model runs remain deferred.
-- Resumption milestone 2 — Proxy review corrections: count_tokens now redacts user/tool messages and
-  fails closed on redaction errors; Redactor.warm fixed; upstream HTTP client closes on daemon shutdown.
-  Focused proxy/server/redactor tests passed (30, one slow deselected). T8 implementation report now exists.
-  Official Haiku 5.5 pricing checked: $0.10 input / $0.50 output per MTok for prompts <=100k tokens.
-- Resumption milestone 1 — Task 14 implemented and independently reviewed: narrow routine git mutation
-  allowlist, force-with-lease main/master block, OpenCode plugin tamper guards, Grep/Glob hook coverage.
-  Fast suite: 252 passed, 4 slow deselected. Proxy landed c8f92ad; independent review found count_tokens
-  redaction bypass and broken Redactor.warm(), fixes next. Real training still active; benchmark waits for it.
-- 2026-10-09 resumed — GPT-6 Astra high owns remaining implementation/review work on `build` (HEAD fc70ad5).
-  Existing uncommitted work is preserved: cli/redact and their tests; proxy, bench metrics, train/eval scripts,
-  NOTES, adapter outputs, proxy/metrics tests. Previous Claude processes remain active: 800-iteration training
-  PID 50433 writes adapters/bantay-lora; smoke training PID 51929 writes a separate scratch directory.
-  Do not duplicate training or overwrite their outputs. Prior Claude session may still write T8/T10/OpenCode
-  files; verify quiescence before taking ownership. Work first on independent review/Task 14 files. Old
-  no-redact daemon PIDs 37695/39369/40728 remain; check port ownership before any live verification.
-- 2026-10-09 16:45 — CONTROLLER SESSION HIT ITS USAGE LIMIT. Subagents below were still running and write their
-  reports into `.superpowers/sdd/2026-10-09-bantay/`; check those report files and `git log` before redoing anything.
-  - T1-2 rules: 3 fix rounds done (head f2cfb26). Round-3 re-review IN FLIGHT. If it reports ≤ minor issues, mark
-    T1-2 complete in the ledger; otherwise one more fix round on rules.py/test_rules.py (fresh implementer).
-  - T3-4 classifier/engine: COMPLETE (head e0f09fd, round-3 re-review clean).
-  - T5-6 server/hook/CLI: COMPLETE (review clean).
-  - T7 redactor: committed (8ecb291). T8 proxy: implementer IN FLIGHT (agent writes task-7-8-report.md; expect
-    bantay/proxy.py + tests/test_proxy.py + a live `claude -p` verification note in docs/NOTES.md). Needs a review after.
-  - T9+T10 data split + LoRA fine-tune: agent IN FLIGHT (writes task-9-10-report.md; commits data/, scripts/,
-    bantay/bench.py (metrics only), adapters/bantay-lora/, docs/NOTES.md, cli default adapter). Needs a review after.
-  - T12 demo: fix round 1 committed (017ad19); re-review IN FLIGHT.
-  - OpenCode adapter: committed (4d2a6c3), live-verified; review IN FLIGHT.
-  - T11 benchmarks, T13 README/submission, Task 14 engine hardening, final whole-branch review: NOT STARTED.
-- Task 14 scope (ledger ruling): allowlist routine `git add <paths>|commit|pull|push` (non-force/non-delete) in
-  bantay/engine.py; `--force-with-lease origin main|master` → block in rules.py; add `Grep|Glob` to MATCHER in
-  bantay/cli.py and regenerate demo/sample-project/.claude/settings.json; add `.opencode/plugin` paths to the
-  guardrail_tamper rule. Then review.
+- 2026-10-09 17:05 — CONTROLLER HIT ITS USAGE LIMIT (second time). Read the ledger's last ~15 lines for the exact
+  verdicts. Summary:
+  - T1-2 rules: head f2cfb26, round-3 re-review done: all addressed, but 1 new Important (redirected
+    `| python3 -m json.tool > f` blocks) + 1 pre-existing Important (`git commit -m "fix shutdown handler"` blocks).
+    Fix these inside Task 14 with a FRESH implementer (round 4 rule), then mark T1-2 complete.
+  - T3-4 classifier/engine: COMPLETE (head e0f09fd).
+  - T5-6 server/hook/CLI: COMPLETE.
+  - T7-8 redactor + proxy: DONE (head c8f92ad), live OAuth proxy verified. NEEDS REVIEW (see ledger for package cmd).
+    Then: pre-flight must push one warm request through the proxy (first request 9-26 s with GLiNER).
+  - T9+T10 data split + LoRA: agent was still running (writes task-9-10-report.md, commits data/, scripts/,
+    bantay/bench.py metrics, adapters/bantay-lora/, docs/NOTES.md, cli default adapter). Check `git log` and the
+    report; if absent, re-run from the brief (data is in the scratchpad gen/ dir, or already under data/raw).
+  - T12 demo: fix round done, re-review clean; depends on Task 14. Add pre-flight check for lease-push → block.
+  - OpenCode adapter: review = Needs fixes (apply_patch header regex; untranslated tools must go raw to the judge).
+  - T11 benchmarks, T13 README/submission/push, Task 14, final whole-branch review: NOT STARTED.
+- Task 14 scope (one fresh implementer, files: bantay/engine.py, bantay/rules.py, bantay/cli.py, demo settings.json,
+  tests): allowlist routine `git add <paths>|commit|pull|push` (non-force/non-delete); `--force-with-lease origin
+  main|master` → block; `Grep|Glob` in MATCHER + regenerate demo/sample-project/.claude/settings.json; `.opencode/plugin`
+  and `~/.config/opencode/plugin` paths (case-folded, normalised) in guardrail_tamper; SAFE_INTERP_RE accepts trailing
+  redirects; literal-strip `git commit -m "..."` / `-m '...'` messages before disk/sql/tamper scans. Then review.
 
 ## Remaining work, in order
 1. Close T1-2 / T3-4 re-reviews; Task 14 engine hardening (see ledger ruling).
