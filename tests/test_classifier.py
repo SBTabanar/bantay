@@ -32,3 +32,14 @@ def test_prefix_cache_matches_full_pass():
         _, cached = c.classify(call)
         full = c._full_probs(call)
         assert all(abs(cached[l] - full[l]) < 0.05 for l in cached), (cached, full)
+
+@pytest.mark.slow
+def test_reason_uses_prefix_cache_and_leaves_it_clean():
+    from bantay.classifier import Classifier
+    c = Classifier()
+    call = ToolCall("Bash", {"command": "npm install lodash"}, cwd="/p", branch="main")
+    before = c.classify(call)[1]
+    r = c.reason(ToolCall("Bash", {"command": "rm -rf ~"}), "block")
+    assert len(r) > 5 and all(x.offset == c._prefix_len for x in c._cache)
+    after = c.classify(call)[1]
+    assert all(abs(before[l] - after[l]) < 1e-3 for l in before), (before, after)

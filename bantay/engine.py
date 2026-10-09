@@ -3,14 +3,25 @@ import re, time
 from .types import ToolCall, Decision
 from . import rules
 
-# No find/fd (they can -delete/-exec); no newlines (a chained second command would skip the model).
-ALLOWLIST_RE = re.compile(
-    r"^\s*(?:ls|pwd|whoami|date|uname|which|type|wc|du|df|tree|file|stat|head|tail|cat|less|grep|rg|diff"
-    r"|git\s+(?:status|diff|log|branch|show|remote|fetch|stash\s+list|rev-parse|blame)"
-    r"|npm\s+(?:test|run\s+(?:test|lint|build|typecheck|dev)|ls|-v|--version)|pnpm\s+(?:test|lint|build)|yarn\s+(?:test|lint|build)"
-    r"|pytest|python3?\s+-m\s+pytest|ruff|eslint|prettier|tsc|cargo\s+(?:test|build|check|clippy)|go\s+(?:test|build|vet)|make\s+(?:test|lint|build)"
-    r"|node\s+-v|python3?\s+--version|echo\s+[^$`\n\r]*)\b[^|;&>`$\n\r]*$"
+# Commands that skip the model. Joins are [ \t] only, so a newline can never chain a second command.
+# The tail excludes pipes, chaining, redirects, substitution and grouping. No find/fd (-delete/-exec)
+# and no less (shell escapes). git branch/remote and version probes are exact listing forms.
+_SAFE_TAIL = r"[^|;&<>`$(){}\n\r]*"
+_WITH_ARGS = (
+    r"(?:ls|pwd|whoami|date|uname|which|type|wc|du|df|tree|file|stat|head|tail|cat|grep|rg|diff|echo"
+    r"|git[ \t]+(?:status|diff|log|show|fetch|stash[ \t]+list|rev-parse|blame)"
+    r"|npm[ \t]+(?:test|run[ \t]+(?:test|lint|build|typecheck|dev)|ls)|pnpm[ \t]+(?:test|lint|build)|yarn[ \t]+(?:test|lint|build)"
+    r"|pytest|python3?[ \t]+-m[ \t]+pytest|ruff|eslint|prettier|tsc|cargo[ \t]+(?:test|build|check|clippy)|go[ \t]+(?:test|build|vet)"
+    r"|make[ \t]+(?:test|lint|build))\b" + _SAFE_TAIL
 )
+_EXACT = (
+    r"git[ \t]+branch(?:[ \t]+(?:-a|-r|-v|-vv|-l|--list|--all|--remotes|--verbose|--show-current))*"
+    r"|git[ \t]+remote(?:[ \t]+(?:-v|--verbose))?"
+    r"|node[ \t]+(?:-v|--version)|python3?[ \t]+(?:-V|--version)|npm[ \t]+(?:-v|--version)"
+)
+# Options that make an otherwise read-only tool run a program, set config, or write a file.
+_OPTION_EXEC = r"(?!.*(?:--pre\b|--upload-pack|--receive-pack|--output\b|(?:^|[ \t])-c[ \t]*[\w.-]+=))"
+ALLOWLIST_RE = re.compile(r"^[ \t]*" + _OPTION_EXEC + r"(?:" + _WITH_ARGS + r"|(?:" + _EXACT + r")[ \t]*)$")
 
 class Engine:
     def __init__(self, classifier=None, block_floor: float = 0.35):
@@ -44,5 +55,11 @@ class Engine:
         label, probs = self.classifier.classify(call)
         if label == "allow" and probs.get("block", 0) >= self.block_floor:
             return Decision("ask", f"Model uncertain (block={probs['block']:.2f}); asking the human.", "model", probs=probs)
-        reason = "Routine action inside the project." if label == "allow" else self.classifier.reason(call, label)
+        if label == "allow":
+            reason = "Routine action inside the project."
+        else:
+            try:
+                reason = self.classifier.reason(call, label)
+            except Exception:  # a failed explanation must not downgrade a block to ask
+                reason = f"Local model judged this {label} (reason unavailable)."
         return Decision(label, reason, "model", probs=probs)
