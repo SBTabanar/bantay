@@ -436,7 +436,7 @@ def test_tuneup_sudo_over_system_dirs_blocks(bash, command):
 
 @pytest.mark.parametrize('command', [
     "sudo mkdir -p /opt/myapp", "sudo cp tool /usr/local/bin/", "sudo chown -R me /usr/local/lib",
-    "sudo cp -R /etc /tmp/etc-backup", "sudo chmod 755 /usr/local/bin/x", "echo x | sudo tee -a /etc/hosts",
+    "sudo cp -R /etc /tmp/etc-backup", "sudo chmod 755 /usr/local/bin/x", "sudo chown -R me ~/.npm",
 ])
 def test_tuneup_routine_sudo_asks(bash, command):
     assert _rule(bash, command) == ("ask", "sudo"), command
@@ -525,7 +525,8 @@ def test_tuneup_literal_or_harmless_substitutions_pass(bash, command):
     assert evaluate(bash(command)) is None, command
 
 # coordinator item: the soft heredoc-commit downgrade checks what the tail does with the message
-@pytest.mark.parametrize('post', [" | sh", " | bash", " && git log -1 --format=%B | sh", " && npm test"])
+@pytest.mark.parametrize('post', [" | sh", " | bash", " && git log -1 --format=%B | sh", " && bash x.sh",
+                                  " && eval \"$(git log -1)\"", " ; xargs -I{} sh -c {}"])
 def test_tuneup_heredoc_commit_unsafe_tail_keeps_block(bash, post):
     assert _rule(bash, _hc("feat(x): shutdown", post=post)) == ("block", "disk_or_system"), post
 
@@ -539,3 +540,63 @@ def test_tuneup_strict_collapse_refuses_unsafe_tail(bash):
     assert collapse_heredoc_messages(cmd) == cmd
     assert _rule(bash, cmd) == ("block", "disk_or_system")
     assert evaluate(bash(_hc("fix shutdown handler", post=" && git push origin feat"))) is None
+
+
+# --- tune-up fix round 1: nothing blocked before may become None ---
+
+@pytest.mark.parametrize('command', [
+    "ssh root@host reboot", "ssh host halt", "ssh host 'shutdown -h now'", 'ssh host "reboot"', "ssh h sudo poweroff",
+    "launchctl reboot", "{ reboot; }", "if true; then reboot; fi", "while x; do halt; done", "watch -n1 reboot",
+    "at now <<< 'shutdown -h now'", "doas reboot", "busybox reboot", "/bin/reboot", "/usr/sbin/shutdown -r now",
+    "(shutdown -h now)", "! reboot", "echo reboot | sh", "echo shutdown -h now | bash", "printf 'halt' | sudo sh",
+])
+def test_fix1_power_forms_block(bash, command):
+    assert _rule(bash, command) == ("block", "disk_or_system"), command
+
+def test_fix1_power_in_a_variable_asks(bash):
+    assert _rule(bash, "cmd=reboot; $cmd") == ("ask", "power_indirect")
+
+@pytest.mark.parametrize('command', [
+    "./scripts/shutdown.sh", "npm run shutdown-hook", "make halt-check", "./scripts/shutdown",
+    "ssh host tail -f /var/log/reboot.log", "MODE=rebooting ./x", "watchman shutdown-server",
+])
+def test_fix1_power_word_inside_a_name_passes(bash, command):
+    assert evaluate(bash(command)) is None, command
+
+@pytest.mark.parametrize('post', [" && npm test", " && npm run push"])
+def test_fix1_heredoc_commit_other_tail_asks(bash, post):
+    assert _rule(bash, _hc("feat(x): shutdown", post=post)) == ("ask", "disk_or_system"), post
+
+def test_fix1_plain_heredoc_commit_with_other_tail_stays_none(bash):
+    assert evaluate(bash(_hc("fix shutdown handler", post=" && npm test"))) is None
+
+@pytest.mark.parametrize('command', ["grep -c '>' /etc/group", 'grep -c ">" /etc/passwd', "awk '$1 > 0' /etc/group"])
+def test_fix1_quoted_angle_bracket_is_not_a_redirect(bash, command):
+    assert evaluate(bash(command)) is None, command
+
+@pytest.mark.parametrize('command', ["echo x >'/etc/sudoers'", "cat x 2>/etc/passwd", "echo x>>/etc/group",
+                                     "sudo sh -c 'echo x > /etc/sudoers.d/a'"])
+def test_fix1_real_redirects_to_auth_files_block(bash, command):
+    assert _rule(bash, command) == ("block", "write_auth_file"), command
+
+@pytest.mark.parametrize('command', ["sudo launchctl list", "sudo launchctl print system", "sudo launchctl blame system/x"])
+def test_fix1_read_only_launchctl_asks(bash, command):
+    assert _rule(bash, command) == ("ask", "sudo"), command
+
+@pytest.mark.parametrize('command', [
+    "sudo launchctl bootout system/x", "sudo launchctl unload x.plist", "sudo tee /usr/bin/x",
+    "sudo mv /etc/hosts /etc/hosts.bak", "sudo cp x /etc/nginx/nginx.conf", "echo x | sudo tee -a /etc/hosts",
+    "sudo chmod +x /bin/x", "sudo chown -R root:wheel ~ /Users && sudo chflags -R schg /Users",
+])
+def test_fix1_sudo_writes_into_system_trees_block(bash, command):
+    assert _rule(bash, command) == ("block", "sudo_destructive"), command
+
+@pytest.mark.parametrize('command', [
+    "echo 'alias sudo=\"/Users/Shared/.sw\"' >> ~/.bash_profile && chmod +x /Users/Shared/.sw",
+    "sudo() { /tmp/x \"$@\"; }", "printf 'function sudo { x; }' > ~/.zshrc",
+])
+def test_fix1_sudo_hijack_blocks(bash, command):
+    assert _rule(bash, command) == ("block", "sudo_hijack"), command
+
+def test_fix1_searching_for_a_sudo_alias_is_not_a_hijack(bash):
+    assert _rule(bash, "grep -rn 'alias sudo=' docs") == ("ask", "sudo")

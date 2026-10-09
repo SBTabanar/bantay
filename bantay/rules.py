@@ -299,7 +299,7 @@ def collapse_heredoc_messages(cmd: str) -> str:
         return cmd
     if not m.group("dash") and re.search(r"(?m)^\t+" + re.escape(d) + r"$", m.group(0)):
         return cmd  # without <<- a tab-indented delimiter does not end the heredoc
-    if not COMMIT_SUFFIX_RE.fullmatch(cmd[m.end():]):
+    if COMMIT_TAIL_RUNS_RE.search(cmd[m.end():]):
         return cmd  # a tail like `&& git log -1 --format=%B | sh` could run the message
     return m.group("pre") + COMMIT_MSG_PLACEHOLDER + " " + cmd[m.end():]  # space: a glued `cmd` stays a separate word
 
@@ -314,6 +314,7 @@ def collapse_heredoc_messages(cmd: str) -> str:
 COMMIT_PREFIX_RE = re.compile(r"(?:[ \t]*(?:(?:git|cd)(?:[ \t]+[\w./@:+,%-]+)*[ \t]*)?(?:&&|;|\n))*[ \t]*")
 # What may follow the closing `)"`: nothing, or plain git/cd commands joined by && ; or newline. A pipe
 # (`| sh`) or anything else could run the message, so the soft downgrade does not apply.
+COMMIT_TAIL_RUNS_RE = re.compile(r"\||\b(?:ba|z|da|k)?sh\b|\b(?:eval|source|xargs)\b|\$\(|`|%B|<\(")
 COMMIT_SUFFIX_RE = re.compile(r"(?:[ \t]*(?:&&|;|\n)[ \t]*(?:(?:git|cd)(?:[ \t]+[\w./@:+,%-]+)*)?)*[ \t;]*\n?")
 HEREDOC_COMMIT_RE = re.compile(
     r"(?P<pre>git[ \t]+commit(?=[ \t])[^\n|;&'\"\\`$#<>(){}]*?[ \t](?:-[asnvq]*m|--message)[ \t]*=?[ \t]*)"
@@ -334,10 +335,14 @@ def without_commit_heredoc_body(cmd: str) -> str | None:
         return None  # without <<- a tab-indented delimiter does not end the heredoc
     return cmd[:m.end("pre")] + COMMIT_MSG_PLACEHOLDER + " " + cmd[m.end():]
 
-def commit_heredoc_tail_ok(cmd: str) -> bool:
-    """Is the text after the heredoc commit's closing `)"` empty or plain git/cd commands (COMMIT_SUFFIX_RE)?"""
+def commit_heredoc_tail(cmd: str) -> str:
+    """'ok' when the text after the heredoc commit's closing `)"` is empty or plain git/cd commands
+    (COMMIT_SUFFIX_RE), 'runs' when it could feed the message to a shell (COMMIT_TAIL_RUNS_RE), else 'other'."""
     m = HEREDOC_COMMIT_RE.search(cmd)
-    return bool(m and COMMIT_SUFFIX_RE.fullmatch(cmd[m.end():]))
+    tail = cmd[m.end():] if m else ""
+    if COMMIT_SUFFIX_RE.fullmatch(tail):
+        return "ok"
+    return "runs" if COMMIT_TAIL_RUNS_RE.search(tail) else "other"
 
 def _commit_message_flag(w: str) -> int:
     """Words consumed by a commit message option at w (2 = option + value, 1 = attached value), else 0."""
@@ -643,24 +648,33 @@ def _secret_file_access(call: ToolCall) -> bool:
 DISK_RE = _rx(r"\bmkfs(?:\.\w+)?\b|\bdiskutil\s+(?:erase\w*|reformat|zeroDisk|randomDisk|secureErase|partitionDisk"
               r"|apfs\s+delete(?:Container|Volume))\b|\bsystemctl\s+(?:reboot|poweroff|halt)\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:")
 # shutdown/reboot/halt/poweroff only in command position (`xcrun simctl shutdown all`, `celery ... control
-# shutdown` are not the machine): the start of a line or segment, inside $( or `, after sudo, or /sbin/<name>.
-POWER_CMDS = {"shutdown", "reboot", "halt", "poweroff"}
+# shutdown` are not the machine): the start of a line or segment, after a quote, `{ ( !` or `$(`/`, after a
+# keyword or launcher (then/do/else, sudo/doas, watch/busybox/launchctl/at, ...), or as /[usr/]{s,}bin/<name>.
+# The name must end the word, so `./scripts/shutdown.sh` and `npm run shutdown-hook` are not it.
+POWER_NAMES = ("shutdown", "reboot", "halt", "poweroff")
+POWER_CMDS = set(POWER_NAMES) | {f"{d}/{n}" for d in ("/sbin", "/usr/sbin", "/bin", "/usr/bin") for n in POWER_NAMES}
+_POWER = r"(?:/(?:usr/)?s?bin/)?(?:shutdown|reboot|halt|poweroff)(?![\w.-])"
 POWER_RE = _rx(
-    r"(?:(?:^|[;&|`]|\$\()[ \t]*(?:sudo(?:[ \t]+-\S+)*[ \t]+)?|\bsudo(?:[ \t]+-\S+)*[ \t]+|(?<![\w/.-])/(?:usr/)?s?bin/)"
-    r"(?:\S*/)?(?:shutdown|reboot|halt|poweroff)\b(?![ \t]*=)")
+    r"(?:(?:^|[;&|`({!'\"]|\$\()|\b(?:then|do|else|sudo|doas|watch|busybox|launchctl|at|nohup|exec|command|time)\b)"
+    r"(?:[ \t]+-\S+)*[ \t]*(?:(?:sudo|doas)(?:[ \t]+-\S+)*[ \t]+)?" + _POWER + r"(?![ \t]*=)"
+    r"|(?<![\w/.-])/(?:usr/)?s?bin/(?:shutdown|reboot|halt|poweroff)(?![\w.-])")
+# ssh's remote command, and a power word printed into a shell
+POWER_REMOTE_RE = _rx(r"\bssh\b[^|;&\n]*\s['\"]?(?:(?:sudo|doas)\s+(?:-\S+\s+)*)?" + _POWER)
+POWER_PIPE_RE = _rx(r"\b(?:echo|printf)\b[^|;&\n]*\b(?:shutdown|reboot|halt|poweroff)\b[^|;&\n]*\|\s*(?:(?:sudo|doas)\s+)?(?:\S*/)?(?:ba|z|da|k)?sh\b")
+POWER_VAR_RE = _rx(r"(?<![\w-])[A-Za-z_]\w*=['\"]?(?:(?:sudo|doas)\s+)?" + _POWER)
 
 POWER_WORD_RE = _rx(r"\b(?:shutdown|reboot|halt)\b")
 HEREDOC_COMMIT_HINT_RE = re.compile(r"\bgit\s+commit\b[\s\S]*<<")
 
 def _disk_or_system(call: ToolCall) -> bool:
     text = _literal_scan_text(call.command)
-    if DISK_RE.search(text) or POWER_RE.search(text):
+    if DISK_RE.search(text) or POWER_RE.search(text) or POWER_REMOTE_RE.search(text) or POWER_PIPE_RE.search(call.command):
         return True
     # Inside a heredoc commit the strict collapse refused, the word itself still counts: `evaluate` softens
     # it to ask when the message is plain text, and keeps the block when the shape could run the body.
     if HEREDOC_COMMIT_HINT_RE.search(call.command) and POWER_WORD_RE.search(text):
         return True
-    return any(os.path.basename(words[0]) in POWER_CMDS for words in _commands(call.command))
+    return any(words[0] in POWER_CMDS for words in _commands(call.command))
 SQL_DESTROY_RE = _rx(r"\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA)|TRUNCATE(?:\s+TABLE)?\s+\w+|DELETE\s+FROM\s+\w+\s*(?:;|[\"']|$))")
 PIPE_INTO_RE = _rx(
     r"\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\b(?:\s+-\S+)*\s+)?(?:env\s+)?(?:\S*/)?"
@@ -694,13 +708,17 @@ ENV_DUMP_RE = re.compile(
     r"(?:^|[;&|(`])\s*(?:printenv\b|(?:env|set)\s*(?:$|[;&|)`]))"
     r"|\b(?:echo|printf)\b[^|;&\n]*\$\{?[A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|PASS|CREDENTIAL)", re.MULTILINE)
 
-SUDO_DESTRUCTIVE_RE = re.compile(r"\bsudo(?:\s+-\S+)*\s+(?:\S*/)?(?:rm|dd|mkfs(?:\.\w+)?|kill|launchctl|shutdown|reboot|halt)\b")
+LAUNCHCTL_READ = r"(?:list|print(?:-disabled|-cache|-token)?|blame|procinfo|hostinfo|resolveport|examine|version|help|managername|manageruid|managerpid|error)"
+SUDO_DESTRUCTIVE_RE = re.compile(r"\bsudo(?:\s+-\S+)*\s+(?:\S*/)?(?:rm|dd|mkfs(?:\.\w+)?|kill|launchctl(?!\s+" + LAUNCHCTL_READ
+                                 + r"\b)|shutdown|reboot|halt)\b")
 SUDO_ALWAYS = {"rm", "dd", "kill", "launchctl", "shutdown", "reboot", "halt", "poweroff"}
 # The system directories themselves (and their core children). `sudo mkdir -p /opt/myapp` or
 # `sudo cp tool /usr/local/bin` are not this; they stay with the ask-tier `sudo` rule.
-SYSTEM_DIR_RE = re.compile(r"^/(?:etc|bin|sbin|System(?:/Library)?|Library|var(?:/(?:db|root|lib))?|private(?:/(?:etc|var))?"
-                           r"|usr(?:/(?:bin|sbin|lib|libexec|share|include))?)?$")
-SYS_ANY_OPERAND = {"mv", "mkdir", "rmdir", "tee", "chmod", "chown", "chgrp", "truncate"}
+SYSTEM_DIR_RE = re.compile(r"^(?:/(?:etc|bin|sbin|System(?:/Library)?|Library|var(?:/(?:db|root|lib))?|private(?:/(?:etc|var))?"
+                           r"|usr(?:/(?:bin|sbin|lib|libexec|share|include))?|Users|home|Applications)?|~|\$HOME|\$\{HOME\})$")
+# writes INTO these trees count too (`sudo tee /usr/bin/x`, `sudo mv /etc/hosts /etc/hosts.bak`)
+SYSTEM_TREE_RE = re.compile(r"^/(?:etc|private/etc|bin|sbin|usr/bin|usr/sbin)/.")
+SYS_ANY_OPERAND = {"mv", "mkdir", "rmdir", "tee", "chmod", "chown", "chgrp", "chflags", "chattr", "truncate"}
 SYS_DEST_OPERAND = {"cp", "ln", "install", "rsync", "ditto"}  # only the destination is overwritten
 
 def _norm_path(p: str) -> str:
@@ -713,19 +731,22 @@ def _sudo_destructive(call: ToolCall) -> bool:
         if not root:
             continue
         name = os.path.basename(words[0])
+        pos = [_norm_path(a) for a in words[1:] if not a.startswith("-")]
+        if name == "launchctl" and pos and re.fullmatch(LAUNCHCTL_READ, pos[0]):
+            continue
         if name in SUDO_ALWAYS or name.startswith("mkfs"):
             return True
-        pos = [_norm_path(a) for a in words[1:] if not a.startswith("-")]
-        if name in SYS_ANY_OPERAND and any(SYSTEM_DIR_RE.match(a) for a in pos):
+        system = lambda a: bool(SYSTEM_DIR_RE.match(a) or SYSTEM_TREE_RE.match(a))
+        if name in SYS_ANY_OPERAND and any(system(a) for a in pos):
             return True
-        if name in SYS_DEST_OPERAND and pos and SYSTEM_DIR_RE.match(pos[-1]):
+        if name in SYS_DEST_OPERAND and pos and system(pos[-1]):
             return True
     return False
 
 # sudoers and the account/auth databases: a write by any means is a privilege-escalation or lockout
 AUTH_FILE_RE = re.compile(r"^(?:/private)?/etc/(?:sudoers(?:\.d(?:/.*)?)?|passwd|shadow|master\.passwd|group|pam\.d(?:/.*)?)$")
 AUTH_WRITE_RE = re.compile(
-    r"(?:>>?\|?|(?:^|[|;&`'\"\n]|\$\(|\bsudo)(?:\s+-\S+)*\s*tee\b[^|;&\n<>]*?\s)\s*['\"]?(?:/private)?/etc/"
+    r"(?:(?<!['\"\\])>>?\|?|(?:^|[|;&`'\"\n]|\$\(|\bsudo)(?:\s+-\S+)*\s*tee\b[^|;&\n<>]*?\s)\s*['\"]?(?:/private)?/etc/"
     r"(?:sudoers|passwd\b|shadow\b|master\.passwd\b|group\b|pam\.d/)"
     r"|\b(?:SUDO_EDITOR|VISUAL|EDITOR)=[^;&|\n]*\bvisudo\b", re.M)
 IN_PLACE_FLAG_RE = re.compile(r"^(?:--in-place|-[A-Za-z]*i)")
@@ -734,13 +755,8 @@ def _writes_auth_file(call: ToolCall) -> bool:
     if AUTH_WRITE_RE.search(_literal_scan_text(call.command)):
         return True
     auth = lambda w: bool(AUTH_FILE_RE.match(_norm_path(w)))
-    for words in _commands(call.command):
+    for words in _commands(call.command):  # redirections are matched on the raw text above (quotes intact)
         name, args = os.path.basename(words[0]), words[1:]
-        for i, w in enumerate(words):
-            if ">" in w:
-                target = w.rsplit(">", 1)[1].lstrip("|") or (words[i + 1] if i + 1 < len(words) else "")
-                if target and auth(target):
-                    return True
         pos = [a for a in args if not a.startswith("-")]
         if name == "tee" and any(auth(a) for a in pos):
             return True
@@ -774,6 +790,14 @@ def _reads_secret_path(call: ToolCall) -> bool:
 def _url_has_secret(call: ToolCall) -> bool:
     return bool(find_secrets(str(call.tool_input.get("url", ""))))
 
+SUDO_HIJACK_RE = _rx(r"\balias\s+sudo=|(?:^|[;&|{\s])(?:function\s+)?sudo\s*\(\s*\)|\bfunction\s+sudo\b")
+
+def _sudo_hijack(call: ToolCall) -> bool:
+    """A sudo alias/function defined, or printed into a file (`echo 'alias sudo=...' >> ~/.zshrc`). Merely
+    searching for one (`grep 'alias sudo=' docs`) is not."""
+    text = _literal_scan_text(call.command)
+    return bool(SUDO_HIJACK_RE.search(text) or (SUDO_HIJACK_RE.search(call.command) and re.search(r">", text)))
+
 RULES: list[Rule] = [
     # --- guardrail self-protection (block) ---
     Rule("guardrail_tamper", BASH + ("Write", "Edit", "MultiEdit"), "block",
@@ -790,6 +814,8 @@ RULES: list[Rule] = [
     Rule("env_dump", BASH, "block", "Prints environment variables, which usually contain secrets.", ENV_DUMP_RE),
     Rule("keychain_dump", BASH, "block", "Reads passwords from the system keychain.",
          _rx(r"\bsecurity\s+(?:find-(?:generic|internet)-password|dump-keychain|export)\b")),
+    Rule("sudo_hijack", BASH, "block", "Redefines sudo (alias or function), a password-capture trick.",
+         predicate=_sudo_hijack),
     Rule("write_auth_file", BASH, "block", "Writes sudoers or a system account file (privilege escalation).",
          predicate=_writes_auth_file),
     # --- destruction (block) ---
@@ -813,6 +839,8 @@ RULES: list[Rule] = [
     Rule("remote_copy", BASH, "ask", "Copies files to or from a remote host.", _rx(r"\b(?:scp|rsync|sftp)\b.*\S+@\S+:")),
     Rule("persistence", BASH, "ask", "Changes cron, launchd, or shell startup files.",
          _rx(r"\bcrontab\b|\blaunchctl\s+(?:load|bootstrap)|LaunchAgents|>>?\s*~/\.(?:zshrc|bashrc|zprofile|bash_profile)")),
+    Rule("power_indirect", BASH, "ask", "Stores a shutdown/reboot command in a variable.",
+         predicate=lambda c: bool(POWER_VAR_RE.search(_literal_scan_text(c.command)))),
     Rule("kill_broad", BASH, "ask", "Kills many processes at once.", _rx(r"\bkill\s+-9\s+-1\b|\bkillall\b|\bpkill\s+-f\b")),
     # --- file tools ---
     Rule("read_secret_file", READS, "block", "Reads or searches a credentials or secrets file.", predicate=_reads_secret_path),
@@ -852,7 +880,7 @@ def evaluate(call: ToolCall) -> Decision | None:
                 outside = _first_match(replace(call, tool_input={**call.tool_input, "command": stripped}))
                 if outside:
                     return _decision(outside)
-                if not commit_heredoc_tail_ok(call.command):  # `)" | sh` could run the message
+                if commit_heredoc_tail(call.command) == "runs":  # `)" | sh` could run the message
                     return _decision(first)
                 return Decision("ask", COMMIT_BODY_REASON, "rule", rule=first.name)
         return _decision(first)
