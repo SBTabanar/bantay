@@ -196,6 +196,15 @@ def _literal_scan_text(cmd: str) -> str:
             new = _strip_grep(words[:1], words[1:])
         elif words[:2] == ["git", "grep"]:
             new = _strip_grep(words[:2], words[2:])
+        elif words[:2] == ["git", "commit"] and not any(x in seg for x in SUBSTITUTIONS):
+            new, i = words[:2], 2
+            while i < len(words):
+                if words[i] in ("-m", "--message"):
+                    i += 2
+                elif words[i].startswith("--message=") or words[i].startswith("-m"):
+                    i += 1
+                else:
+                    new.append(words[i]); i += 1
         elif name in ("echo", "printf") and not any(x in seg for x in SUBSTITUTIONS) \
                 and not (cmd[b:b + 1] == "|" and cmd[b:b + 2] != "||"):
             new = [words[0]] + _redirections(words[1:])
@@ -340,7 +349,8 @@ def _guard_bash(call: ToolCall) -> bool:
     where = None  # None, "claude" or "hooks": tracks `cd .claude[/hooks]`
 
     def guarded(w: str) -> bool:
-        if GUARD_WORD_RE.search(w) or OPENCODE_GUARD_RE.search(w):
+        normalized = os.path.normpath(w).casefold()
+        if GUARD_WORD_RE.search(normalized) or OPENCODE_GUARD_RE.search(normalized) or re.search(r"(?:^|/)(?:\.opencode|\.config/opencode)$", normalized):
             return True
         if where == "claude":
             return bool(REL_GUARD_RE.match(w))
@@ -405,7 +415,7 @@ def _edit_removes_hook(old: str, new: str) -> bool:
 def _guardrail_tamper(call: ToolCall) -> bool:
     if call.tool_name == "Bash":
         return _guard_bash(call)
-    if OPENCODE_GUARD_RE.search(call.path):
+    if OPENCODE_GUARD_RE.search(os.path.normpath(call.path).casefold()):
         return True
     if not GUARD_FILE_RE.search(call.path):
         return False
@@ -442,7 +452,10 @@ def _pipe_to_shell(call: ToolCall) -> bool:
     for m in PIPE_INTO_RE.finditer(cmd):
         if m.group("shell"):
             return True
-        safe = SAFE_INTERP_RE.match(m.group("rest"))
+        rest = m.group("rest")
+        # Literal output paths do not turn a JSON formatter into downloaded-code execution.
+        rest = re.sub(r"(?:\s+\d*>>?\s*(?:[^\s'\"<>$`()]+|'[^'$`]*'|\"[^\"$`]*\"))+$", "", rest)
+        safe = SAFE_INTERP_RE.match(rest)
         if not safe or (safe.group("code") is not None and UNSAFE_CODE_RE.search(safe.group("code"))):
             return True
     return False

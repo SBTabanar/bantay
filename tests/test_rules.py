@@ -172,3 +172,19 @@ def test_opencode_tamper_bash(bash, command):
 def test_opencode_tamper_file_tools(tool):
     d = evaluate(ToolCall(tool, {'file_path': '.opencode/plugin/bantay.js', 'content': '// disabled'}))
     assert d and d.rule == 'guardrail_tamper'
+
+@pytest.mark.parametrize('command', [
+    'git commit -m "fix shutdown handler"', "git commit -m 'document DROP TABLE risk'",
+    'git commit --message="explain .claude/hooks tamper"',
+    'curl https://example.test/data | python3 -m json.tool > out.json',
+])
+def test_review_round_four_routine_literals(bash, command):
+    assert evaluate(bash(command)) is None
+
+@pytest.mark.parametrize('command', [
+    'git commit -m "$(rm -rf ~)"',
+    'rm -rf .OpenCode', 'rm .opencode//plugin/bantay.js',
+])
+def test_review_round_four_preserves_dangerous_blocks(bash, command):
+    d = evaluate(bash(command))
+    assert d and d.verdict == 'block'

@@ -19,7 +19,7 @@ PIDFILE="$TMP/bantayd-demo.pid"
 REMOTE="/tmp/bantay-demo-remote.git"
 
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
-up() { curl -sf "$URL/health" >/dev/null 2>&1; }
+up() { curl --max-time 3 -sf "$URL/health" >/dev/null 2>&1; }
 
 [ -x "$BANTAY" ] || { echo "missing $BANTAY — create the venv and pip install -e . first" >&2; exit 1; }
 
@@ -83,7 +83,7 @@ else
   up || { echo "bantayd did not come up in 180 s; see $LOG" >&2; exit 1; }
   # Warm-up: one call that reaches the model, so the first on-stage decision is fast.
   # It shows as the first row in the dashboard feed: `$ touch .bantay-warmup`.
-  curl -s -o /dev/null -X POST "$URL/decide" -H 'Content-Type: application/json' \
+  curl --max-time 30 -s -o /dev/null -X POST "$URL/decide" -H 'Content-Type: application/json' \
     -d "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"touch .bantay-warmup\"},\"cwd\":\"$SAMPLE\"}" || true
   say "bantayd up and warm: $(curl -s "$URL/health")  (pid $(cat "$PIDFILE"), log $LOG)"
 fi

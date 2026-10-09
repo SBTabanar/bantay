@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 // Bantay adapter for OpenCode (>= 1.18): every guarded tool call is judged by the
 // local bantayd daemon before it runs. Plain ESM, no dependencies.
 //
@@ -17,9 +18,9 @@ function parsePatch(text) {
   const files = [];
   let cur = null;
   for (const line of String(text || "").split("\n")) {
-    const m = line.match(/^\*\*\* (Add|Update|Delete) File: (.+)$/);
+    const m = line.match(/^\*\*\* (Add|Update|Delete) File:\s*(.+)$/);
     if (m) { cur = { op: m[1], path: m[2].trim(), plus: [], minus: [] }; files.push(cur); continue; }
-    const mv = line.match(/^\*\*\* Move to: (.+)$/);
+    const mv = line.match(/^\*\*\* Move to:\s*(.+)$/);
     if (mv && cur) { files.push({ op: "Add", path: mv[1].trim(), plus: cur.plus, minus: [] }); continue; }
     if (!cur || line.startsWith("***")) continue;
     if (line.startsWith("+")) cur.plus.push(line.slice(1));
@@ -40,11 +41,12 @@ function translate(tool, args) {
     case "glob": return [{ tool_name: "Glob", tool_input: { pattern: a.pattern ?? "", path: a.path ?? "" } }];
     case "webfetch": return [{ tool_name: "WebFetch", tool_input: { url: a.url ?? "" } }];
     case "apply_patch":
-      return parsePatch(a.patchText).map((f) =>
+      return parsePatch(a.patchText).length ? parsePatch(a.patchText).map((f) =>
         f.op === "Delete" ? { tool_name: "Bash", tool_input: { command: `rm -- ${JSON.stringify(f.path)}` } }
         : f.op === "Add" ? { tool_name: "Write", tool_input: { file_path: f.path, content: f.plus.join("\n") } }
-        : { tool_name: "Edit", tool_input: { file_path: f.path, old_string: f.minus.join("\n"), new_string: f.plus.join("\n") } });
-    default: return [];
+        : { tool_name: "Edit", tool_input: { file_path: f.path, old_string: f.minus.join("\n"), new_string: f.plus.join("\n") } }) : [{ tool_name: tool, tool_input: a }];
+    case "todowrite": case "question": case "invalid": return [];
+    default: return [{ tool_name: tool, tool_input: a }];
   }
 }
 
@@ -80,7 +82,7 @@ function message(d) {
 async function guard(tool, args, { directory = process.cwd(), sessionID = "" } = {}) {
   const calls = translate(tool, args);
   if (!calls.length) return null;
-  const cwd = (tool === "bash" && args?.workdir) || directory;
+  const cwd = resolve(directory, (tool === "bash" && args?.workdir) || ".");
   let worst = null;
   for (const c of calls) {
     const d = selfTamper(c)

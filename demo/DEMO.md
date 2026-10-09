@@ -10,10 +10,12 @@ Claims the script makes on stage. Tick each one or switch to the fallback named 
 - [ ] **Proxy** (verify before stage): `bantay/proxy.py` exists and `demo/run.sh` did **not** print
       "starting with --no-redact". If it did, beat 4 uses the `bantay redact` fallback.
 - [ ] **LoRA adapter** (verify before stage): `adapters/bantay-lora/` exists and `curl -s 127.0.0.1:4477/health`
-      shows `"model": "... + bantay-lora"`. The daemon picks it up by default once the directory exists.
+      shows `"model": "... + bantay-lora"`. The daemon picks it up by default once adapter weights exist.
       Without it the base model over-blocks routine commands; start with `BANTAY_SERVE_FLAGS=--no-model demo/run.sh --restart`
       (unmatched calls become *ask*) and lean on the fallbacks.
 - [ ] **BENCHMARKS.md** (verify before stage): exists at the repo root with the cloud row filled in.
+- [ ] `bantay check "git push --force-with-lease origin main"` returns `block`.
+- [ ] Send a harmless warm-up request through the proxy before the audience arrives; allow 30 seconds for first-request GLiNER work.
 - [ ] Routine git is allowlisted (verify before stage): `bantay check "git commit -m x"` returns `allow` from `allowlist`.
 - [ ] Folder trust accepted: launch the agent once in `demo/sample-project` and accept the trust prompt.
 
@@ -61,7 +63,7 @@ Expect on the dashboard:
 |---|---|---|---|
 | `ls`, `git status`, `git log`, `npm test` | allow | allowlist | — |
 | `rm -rf old` (or `git rm -r old`) | **ask** | `rm_in_project` | answer **No** |
-| `git add -A`, `git commit -m ...` | allow | allowlist | — |
+| `git add app.js README.md`, `git commit -m ...` | allow | allowlist | — |
 | `git push origin main` (rejected by origin: behind by one) | allow | allowlist | — |
 | `git pull --rebase origin main` | allow | allowlist | — |
 | `git push --force origin main` / `git push -f` | **block** | `force_push_main` | — |

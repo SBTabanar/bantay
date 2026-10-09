@@ -40,8 +40,7 @@ message becomes the tool result the model sees.
 | `webfetch` | `url` | `WebFetch {url}` |
 | `apply_patch` | `patchText` | one call per file: Add → `Write`, Update → `Edit` (`-` lines / `+` lines), Delete → `Bash rm -- path`; the strictest verdict wins |
 
-Other tools (`todowrite`, `task`, `skill`, `question`, MCP tools, ...) are not sent,
-matching the Claude Code hook's matcher.
+Other tools, including MCP/custom tools, are sent with their original name and arguments for model review. Only `todowrite`, `question`, and `invalid` skip the judge. Unknown patch formats are sent raw rather than silently allowed.
 
 Verdicts: `allow` → the tool runs. `block` → `Error("[bantay] <reason> (rule: <rule>)")`.
 
@@ -54,7 +53,7 @@ send one request first (for example `bantay check --tool Read README.md`).
 
 The plugin also refuses, locally, any write, edit, or shell `rm`/`mv`/`sed -i`/`>` aimed
 at `.opencode/plugin(s)/` or `~/.config/opencode/plugin(s)/`, so the agent cannot
-delete its own guard (the daemon's `guardrail_tamper` rule only knows Claude Code paths).
+delete its own guard (the daemon also checks normalized OpenCode plugin paths).
 
 ## Ask mode caveat
 

@@ -1,0 +1,10 @@
+{
+  "model": "claude-haiku-5-5",
+  "checked": "2026-10-09",
+  "source": "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+  "input_usd_per_million": 0.10,
+  "output_usd_per_million": 0.50,
+  "scope": "Standard API requests with prompts up to 100000 tokens; excludes caching, thinking and CLI context overhead",
+  "assumed_input_tokens": 180,
+  "assumed_output_tokens": 2
+}
